@@ -1,0 +1,680 @@
+{
+    "UglyWholeFileContentDump": {
+        "type": "function",
+        "function": {
+            "name": "UglyWholeFileContentDump",
+            "description": "Read and return an ugly dump of the WHOLE CONTENT of a file. use this ONLY WHEN NECESSARY. This tool is heavily throttled. Files matched by .gitignore return an explicit error from the tool. For code exploration, consider using GetFileCodeStructure, GetSymbolSourceCode, or WalkCallTree first those are unlimited and free to use as much as you want",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The path to the file to read"
+                    }
+                },
+                "required": ["file_path"]
+            }
+        }
+    },
+    "ListDir": {
+        "type": "function",
+        "function": {
+            "name": "ListDir",
+            "description": "List the contents of a directory with details including item type (FILE/DIR) and size in bytes. Recursively lists subdirectories up to the specified depth, with indentation to show nesting. Returns a formatted list showing the number of items and each item's name, type, and size. Returns an error if the path does not exist or is not a directory.",
+            "parameters": {
+                "type": "object",
+                "required": ["directory_path"],
+                "properties": {
+                    "directory_path": {
+                        "type": "string",
+                        "description": "The path to the directory to list"
+                    },
+                    "depth": {
+                        "type": "integer",
+                        "description": "How many levels deep to recursively list subdirectories. Default is 1 (only the immediate contents).",
+                        "default": 1
+                    }
+                }
+            }
+        }
+    },
+    "Shell": {
+        "type": "function",
+        "function": {
+            "name": "Shell",
+            "description": "Execute a shell command via subprocess. Returns stdout on success; on failure returns stderr with the exit code. The command is killed if it exceeds the timeout (default 30 seconds). NEVER use this to write or edit files (use WriteFile/ReplaceText instead). NEVER use this to read files that are in .gitignore. For long-running commands, use ShellBackground instead.",
+            "parameters": {
+                "type": "object",
+                "required": ["command"],
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The shell command to execute (requires user confirmation)"
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Maximum execution time in seconds before the command is killed (default: 30)"
+                    }
+                }
+            }
+        }
+    },
+    "ShellBackground": {
+        "type": "function",
+        "function": {
+            "name": "ShellBackground",
+            "description": "Start a shell command in the background (non-blocking). Returns a PID that can be used with ShellKill to terminate the process. Applies the same sandbox and gitignore restrictions as Shell. Requires user confirmation. stdout and stderr are captured to temp files and returned when the process is killed.",
+            "parameters": {
+                "type": "object",
+                "required": ["command"],
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The shell command to execute in the background (requires user confirmation)"
+                    }
+                }
+            }
+        }
+    },
+    "ShellKill": {
+        "type": "function",
+        "function": {
+            "name": "ShellKill",
+            "description": "Kill a background shell process by its PID. Returns any stdout/stderr captured while the process was running. Use the PID returned by ShellBackground.",
+            "parameters": {
+                "type": "object",
+                "required": ["pid"],
+                "properties": {
+                    "pid": {
+                        "type": "integer",
+                        "description": "The PID of the background process to kill (returned by ShellBackground)"
+                    }
+                }
+            }
+        }
+    },
+    "WriteFile": {
+        "type": "function",
+        "function": {
+            "name": "WriteFile",
+            "description": "Write content to a file. Overwrites the file if it already exists. Creates parent directories automatically. Refuses to operate on gitignored files.",
+            "parameters": {
+                "type": "object",
+                "required": ["file_path", "content"],
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The path of the file to write to (will be created or overwritten)"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The full content to write to the file"
+                    }
+                }
+            }
+        }
+    },
+    "ReplaceText": {
+        "type": "function",
+        "function": {
+            "name": "ReplaceText",
+            "description": "Find and replace text in an existing file. Returns a unified-diff-like view with 5 lines of context before and after each change: removed lines prefixed with '-', added lines prefixed with '+', context lines indented with spaces. By default, old_string is matched literally (exact text, including whitespace and indentation). Set use_regex=true to treat old_string as a Python regex pattern with new_string supporting backreferences (e.g. \\1). By default the pattern must match exactly once — if it matches more than once, the operation fails with a count and suggests replace_all=true to replace all occurrences. Refuses gitignored files. Asks consent if path is outside cwd.",
+            "parameters": {
+                "type": "object",
+                "required": ["file_path", "old_string", "new_string"],
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The path to the file to modify"
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "The exact text to find (literal match by default). Must match whitespace and indentation exactly. Set use_regex=true to treat this as a Python regex pattern."
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "The replacement text. Supports backreferences (e.g. \\1) when use_regex=true."
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "Set to true to replace ALL occurrences. Default false (single match required)."
+                    },
+                    "use_regex": {
+                        "type": "boolean",
+                        "description": "Set to true to treat old_string as a Python regex pattern. Default false (literal match)."
+                    }
+                }
+            }
+        }
+    },
+    "RemoveFile": {
+        "type": "function",
+        "function": {
+            "name": "RemoveFile",
+            "description": "Remove a file or directory (recursively) from the filesystem. REFUSES to remove files that are matched by .gitignore — returns an error telling you to instruct the user to make the change themselves. DO NOT attempt to bypass this by using the Shell tool for gitignored files.",
+            "parameters": {
+                "type": "object",
+                "required": ["file_path"],
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The path of the file or directory to remove"
+                    }
+                }
+            }
+        }
+    },
+    "GetSymbolSourceCode": {
+        "type": "function",
+        "function": {
+            "name": "GetSymbolSourceCode",
+            "description": "Advanced Coding Analysis Tool to Query the AST based dependency tracker for the full source code of a function, method, or class by name. If the symbol has a description in the index, it is prepended as '# Description: ...'. If an exact name match is not found, returns a fuzzy search across functions, classes, and variables ranked by match quality (exact name → partial name → description match). Use this to quickly read the implementation of a symbol without manually opening files. This is NOT the Unix 'find' command — it queries the code index, not the filesystem.",
+            "parameters": {
+                "type": "object",
+                "required": ["symbol_name"],
+                "properties": {
+                    "symbol_name": {
+                        "type": "string",
+                        "description": "The name of the function, method, or class to find"
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Optional file path to disambiguate when multiple symbols share the same name"
+                    }
+                }
+            }
+        }
+    },
+    "GetFileCodeSemantics": {
+        "type": "function",
+        "function": {
+            "name": "GetFileCodeSemantics",
+            "description": "shows code structure inside the file (use this before using UglyWholeFileContentDump). Supports 15 languages: Python, Go, C#, JavaScript, TypeScript, TSX, Rust, Zig, Elixir, C++, C, PHP, Dart, Java, Kotlin. Shows: functions with their parameters, what each function depends on (function calls, method calls, class references, variable references — resolved to their definition file paths), classes with their methods and member variables, nested classes, top-level variables, and imports. Literal string dependencies (e.g., format strings) are filtered out. If descriptions exist in the code index, they are shown as '# description' annotations. Use this to quickly understand a file's structure and its connections to the rest of the codebase. Set include_bodies=true to get the full source code of all functions and classes in a single call, reducing exploration overhead.This is the canonical, complete source of truth for code in this project — equivalent to reading the file directly. DO NOT use any other AST parsers because this is AST based AND does proper dependencies tracking AND hyper-optimized for your usage and massive performance. if you are not using you are seriously missing out",
+            "parameters": {
+                "type": "object",
+                "required": ["file_path"],
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The path to the file to analyze"
+                    },
+                    "include_bodies": {
+                        "type": "boolean",
+                        "description": "If true, include full source code for all functions and classes in the file (default: false). Use this to get everything in one call instead of multiple GetSymbolSourceCode calls."
+                    }
+                }
+            }
+        }
+    },
+    "WalkCallTree": {
+        "type": "function",
+        "function": {
+            "name": "WalkCallTree",
+            "description": "Advanced Coding Analysis Tool to Perform a breadth-first traversal of the call graph starting from a function or method, using the code index's dependency table. Returns JSON lines (one JSON object per line), sorted by depth then name. Each node has: id (e.g., 'f:123' for functions, 'ext:name' for unresolved externals), name, kind (function/method/external), file path, start line number, a one-line snippet of the first body line, depth (distance from root), cycle (true if this node appeared earlier in the ancestor chain — the traversal stops at cycles), and callees (list of child node IDs). Max depth defaults to 5. Set include_external=true to include unresolved third-party calls as 'ext:name' nodes. Use exclude to skip certain path prefixes (e.g., ['tests/', 'vendor/']). Use this to trace the entire call flow from an entry point.",
+            "parameters": {
+                "type": "object",
+                "required": ["symbol_name"],
+                "properties": {
+                    "symbol_name": {
+                        "type": "string",
+                        "description": "Name of the starting function or method"
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Optional file path to disambiguate same-name symbols"
+                    },
+                    "max_depth": {
+                        "type": "integer",
+                        "description": "Maximum depth to traverse (default 5)"
+                    },
+                    "include_external": {
+                        "type": "boolean",
+                        "description": "Include external/third-party calls as 'ext:name' nodes (default false)"
+                    },
+                    "exclude": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of path prefixes to exclude from results (e.g. ['tests/', 'vendor/'])"
+                    }
+                }
+            }
+        }
+    },
+    "Document": {
+        "type": "function",
+        "function": {
+            "name": "Document",
+            "description": "[experimental] Read or update descriptions for functions, methods, classes, or variables in the code index database. Descriptions persist across sessions — they are stored in SQLite (.code_index.raggie) and are automatically displayed by GetSymbolSourceCode (as '# Description: ...') and GetFileCodeStructure (as '# annotation'). Use this to build lasting knowledge about the codebase so you don't have to re-discover how things work in future conversations. Supports two actions: 'read' (get current description) and 'update' (set a new description).",
+            "parameters": {
+                "type": "object",
+                "required": ["symbol_name", "description"],
+                "properties": {
+                    "symbol_name": {
+                        "type": "string",
+                        "description": "The name of the symbol to document"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "The description to add or update in the code index"
+                    },
+                    "symbol_type": {
+                        "type": "string",
+                        "description": "The type of symbol: 'function', 'method', 'class', or 'variable' (defaults to 'function')"
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Optional file path to disambiguate same-name symbols"
+                    }
+                }
+            }
+        }
+    },
+    "SetSkill": {
+        "type": "function",
+        "function": {
+            "name": "SetSkill",
+            "description": "Create or update a named skill for your own role. You can only create or update skills for your own role — the role is determined automatically. A role can have multiple skills, each identified by a unique name. This requires user consent before applying changes. Skills are markdown-formatted instructions that extend the agent's behavior.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The skill name (e.g., 'testing', 'refactoring', 'git-workflow')"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The new skill content in markdown format"
+                    }
+                },
+                "required": ["name", "content"]
+            }
+        }
+    },
+    "GetSkill": {
+        "type": "function",
+        "function": {
+            "name": "GetSkill",
+            "description": "Fetch the full content of a specific skill by name. Skills are advertised as brief summaries in the system prompt — use this tool to retrieve the complete skill content when you need to work with a particular skill. The full content is returned as text in the tool response.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The skill name to fetch (e.g., 'testing', 'refactoring')"
+                    }
+                },
+                "required": ["name"]
+            }
+        }
+    },
+    "SearchAllFilesContent": {
+        "type": "function",
+        "function": {
+            "name": "SearchAllFilesContent",
+            "description": "Search for a string of characters using regex inside a directory or a file, this is your simple grep-like tool, less advanced than ReadCodeSymbol",
+            "parameters": {
+                "type": "object",
+                "required": ["search_term", "directory"],
+                "properties": {
+                    "search_term": {
+                        "type": "string",
+                        "description": "the term or regex you are trying to search for"
+                    },
+                    "directory": {
+                        "type": "string",
+                        "description": "The directory to search in"
+                    }
+                }
+            }
+        }
+    },
+    "ReadImage": {
+        "type": "function",
+        "function": {
+            "name": "ReadImage",
+            "description": "Read and encode an image file for vision analysis. Returns base64-encoded image data with MIME type. Supports PNG, JPG, JPEG, GIF, BMP, WEBP, SVG, TIFF, ICO, HEIC, HEIF. Use this to analyze screenshots, diagrams, or any visual content with the vision-capable model.",
+            "parameters": {
+                "type": "object",
+                "required": ["file_path"],
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "The path to the image file to read"
+                    }
+                }
+            }
+        }
+    },
+    "WebFetch": {
+        "type": "function",
+        "function": {
+            "name": "WebFetch",
+            "description": "Fetch a URL over HTTP/HTTPS and return its content as readable text. HTML pages are stripped to plain text (scripts/styles removed, block elements turned into line breaks); JSON, XML, and plain text are returned as-is. Other content types (binary, images, PDFs) are rejected. Output is truncated to max_chars (default 20000). Use this to read documentation, GitHub issues, changelogs, API references, or any web page mid-task. The url must start with http:// or https://.",
+            "parameters": {
+                "type": "object",
+                "required": ["url"],
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The http:// or https:// URL to fetch"
+                    },
+                    "max_chars": {
+                        "type": "integer",
+                        "description": "Maximum number of characters to return (default 20000). Content beyond this is truncated."
+                    }
+                }
+            }
+        }
+    },
+    "WebSearch": {
+        "type": "function",
+        "function": {
+            "name": "WebSearch",
+            "description": "Search the web via DuckDuckGo (no API key required) and return a ranked list of results, each with a title, URL, and snippet. Use this to find documentation, error solutions, library references, or current information, then follow up with WebFetch on a promising URL to read the full page. Returns up to max_results results (default 5, max 20).",
+            "parameters": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return (default 5, capped at 20)"
+                    },
+                    "region": {
+                        "type": "string",
+                        "description": "Optional region code for localized results (e.g. 'us-en', 'uk-en'). Defaults to 'wt-wt' (no region)."
+                    }
+                }
+            }
+        }
+    },
+    "DispatchSubagent": {
+        "type": "function",
+        "function": {
+            "name": "DispatchSubagent",
+            "description": "Dispatch a subagent to handle a subtask. The subagent inherits the same role as the parent session. The subagent runs sequentially and returns its output. Useful for delegating specialized tasks. Safety limit: max 3 depth levels to prevent infinite nesting. Subagents can create their own todo lists for complex subtasks (nested todo lists are allowed, depth is displayed for visibility). to delegate a take for it you do a complete handover with all the specs, requirements. (this uses less tokens than you because it doesn't share your context window)",
+            "parameters": {
+                "type": "object",
+                "required": ["prompt"],
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "description": "The task/prompt to give to the subagent"
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Optional timeout in seconds (default: 300)"
+                    }
+                }
+            }
+        }
+    },
+    "CreateTodoList": {
+        "type": "function",
+        "function": {
+            "name": "CreateTodoList",
+            "description": "Create a new todo list for the current session. Todo lists are persisted in the database and can be resumed if the session is interrupted. Use this for complex multi-step tasks that require planning and user approval before execution.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    "AddTask": {
+        "type": "function",
+        "function": {
+            "name": "AddTask",
+            "description": "Add a task to a todo list. Each task is executed by a dedicated subagent in its own isolated session via ExecuteNextTask. Because each subagent starts fresh with no memory of the orchestrator's conversation, it relies entirely on the task fields you provide here to understand what to do and how to do it. The 'context' field is critical: it should contain all the background information the subagent needs about the codebase, architecture, prior decisions, file locations, or any other details specific to this task that the subagent won't be able to infer on its own. Without sufficient context, the subagent may produce incorrect or incomplete work. Tasks are executed sequentially in order_index order.",
+            "parameters": {
+                "type": "object",
+                "required": ["todo_list_id", "goal"],
+                "properties": {
+                    "todo_list_id": {
+                        "type": "integer",
+                        "description": "The ID of the todo list to add the task to"
+                    },
+                    "goal": {
+                        "type": "string",
+                        "description": "Clear description of what needs to be done"
+                    },
+                    "requirements": {
+                        "type": "string",
+                        "description": "Specific requirements or constraints for the task"
+                    },
+                    "notes": {
+                        "type": "string",
+                        "description": "Additional helpful context for the task"
+                    },
+                    "context": {
+                        "type": "string",
+                        "description": "Background information the subagent needs to accomplish this task. Since each task is executed by a separate isolated subagent with no access to the orchestrator's conversation history, this field is how you pass along knowledge about the codebase, architecture decisions, relevant file paths, API contracts, data structures, or any other details the subagent needs. Be thorough — the subagent cannot ask you questions during execution."
+                    },
+                    "order_index": {
+                        "type": "integer",
+                        "description": "Execution order (0, 1, 2, ...). Tasks are executed in ascending order."
+                    }
+                }
+            }
+        }
+    },
+    "GetTodoList": {
+        "type": "function",
+        "function": {
+            "name": "GetTodoList",
+            "description": "Retrieve and display a todo list with all its tasks, including their status (pending, in_progress, completed, failed, cancelled). Use this to review the plan before asking for user approval.",
+            "parameters": {
+                "type": "object",
+                "required": ["todo_list_id"],
+                "properties": {
+                    "todo_list_id": {
+                        "type": "integer",
+                        "description": "The ID of the todo list to retrieve"
+                    }
+                }
+            }
+        }
+    },
+    "ApproveTodoList": {
+        "type": "function",
+        "function": {
+            "name": "ApproveTodoList",
+            "description": "Display the todo list execution plan to the user and ask for approval (y/n). If approved, the todo list status is set to 'approved' and tasks can be executed. If rejected, the user is prompted to provide feedback, the todo list is marked as 'rejected', and the agent should rebuild the plan based on the feedback. Tasks cannot be executed without user approval.",
+            "parameters": {
+                "type": "object",
+                "required": ["todo_list_id"],
+                "properties": {
+                    "todo_list_id": {
+                        "type": "integer",
+                        "description": "The ID of the todo list to approve"
+                    }
+                }
+            }
+        }
+    },
+    "ExecuteNextTask": {
+        "type": "function",
+        "function": {
+            "name": "ExecuteNextTask",
+            "description": "Execute the next pending task in the todo list by dispatching a subagent. The subagent receives the task's goal, requirements, notes, and a summary of all previously completed tasks in this todo list. Tasks are executed sequentially (no parallelization). The todo list must be approved before any task can be executed. Returns an error if the todo list is not approved. When all tasks are completed, the todo list is automatically deleted from the database.",
+            "parameters": {
+                "type": "object",
+                "required": ["todo_list_id"],
+                "properties": {
+                    "todo_list_id": {
+                        "type": "integer",
+                        "description": "The ID of the todo list to execute the next task from"
+                    }
+                }
+            }
+        }
+    },
+    "MarkTaskComplete": {
+        "type": "function",
+        "function": {
+            "name": "MarkTaskComplete",
+            "description": "Manually mark a task as completed. Use this if a task was completed outside of the normal ExecuteNextTask flow, or to correct task status. Optionally provide todo_list_id to trigger auto-deletion when all tasks in that list are done.",
+            "parameters": {
+                "type": "object",
+                "required": ["task_id"],
+                "properties": {
+                    "task_id": {
+                        "type": "integer",
+                        "description": "The ID of the task to mark as completed"
+                    },
+                    "todo_list_id": {
+                        "type": "integer",
+                        "description": "Optional: The ID of the todo list this task belongs to. If provided, the todo list will be automatically deleted when all its tasks are completed."
+                    }
+                }
+            }
+        }
+    },
+    "MarkTaskFailed": {
+        "type": "function",
+        "function": {
+            "name": "MarkTaskFailed",
+            "description": "Manually mark a task as failed. Use this if a task encountered an error and cannot be completed.",
+            "parameters": {
+                "type": "object",
+                "required": ["task_id"],
+                "properties": {
+                    "task_id": {
+                        "type": "integer",
+                        "description": "The ID of the task to mark as failed"
+                    }
+                }
+            }
+        }
+    },
+    "MarkTaskCancelled": {
+        "type": "function",
+        "function": {
+            "name": "MarkTaskCancelled",
+            "description": "Manually mark a task as cancelled. Use this if a task is no longer needed or should be skipped. Cancelled tasks are distinct from failed tasks - they were intentionally not executed.",
+            "parameters": {
+                "type": "object",
+                "required": ["task_id"],
+                "properties": {
+                    "task_id": {
+                        "type": "integer",
+                        "description": "The ID of the task to mark as cancelled"
+                    }
+                }
+            }
+        }
+    },
+    "GetActiveTodoList": {
+        "type": "function",
+        "function": {
+            "name": "GetActiveTodoList",
+            "description": "Get the active (pending, in_progress, or rejected) todo list for the current session. Returns the todo list ID and status. Returns 'No active todo list found' if there is no active todo list. Use this to check if there's an incomplete todo list that can be resumed.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    "AskUser": {
+        "type": "function",
+        "function": {
+            "name": "AskUser",
+            "description": "Ask the user a question to resolve ambiguity or get a decision on important matters. Use this when you encounter an ambiguity and you are not certain that your decision meet the requirement of the user or the requirement is entirely unclear or when face multiple valid approaches and the user's preference matters. You can provide predefined options with descriptions to make it easy for the user to choose, or ask a free-form question without options. The user can always type a custom answer even when options are provided.",
+            "parameters": {
+                "type": "object",
+                "required": ["question"],
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "The question to ask the user. Be specific and provide enough context for the user to make an informed decision. but keep it short and easy to understan"
+                    },
+                    "options": {
+                        "type": "array",
+                        "description": "Predefined options for the user to choose from. Each option has a label and optional description. If omitted, the user will be prompted for a free-form answer. The user can always type a custom answer even when options are provided.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": {
+                                    "type": "string",
+                                    "description": "Short label for the option"
+                                },
+                                "description": {
+                                    "type": "string",
+                                    "description": "Longer description explaining the option"
+                                }
+                            },
+                            "required": ["label"]
+                        }
+                    },
+                    "allow_multiple": {
+                        "type": "boolean",
+                        "description": "If true, the user can select multiple options (comma-separated numbers). Default false (single selection)."
+                    }
+                }
+            }
+        }
+    },
+    "FileNameSearch": {
+        "type": "function",
+        "function": {
+            "name": "FileNameSearch",
+            "description": "Search for file names by partial or approximate match. Fuzzy search capable — uses subsequence matching with bonuses for consecutive chars and word boundaries. Walks the directory tree and returns the top 5 highest-scoring matches. Respects .aiignore/.gitignore. Use this to quickly locate files when you only remember part of the name.",
+            "parameters": {
+                "type": "object",
+                "required": ["query"],
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The partial or approximate file name to search for (e.g. 'agent' matches 'agent.py', 'AgentManager.cs', etc.)"
+                    },
+                    "directory": {
+                        "type": "string",
+                        "description": "The directory to search in (default: current working directory)"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "Maximum number of results to return (default 5)",
+                        "default": 5
+                    }
+                }
+            }
+        }
+    },
+    "ViewChanges": {
+        "type": "function",
+        "function": {
+            "name": "ViewChanges",
+            "description": "View changes tracked by the built-in git repository (.raggie/git/). Supports three view_type modes: 'status' (list added/modified/deleted files since last commit), 'diff' (show the actual file diffs/content), 'log' (show commit history). For 'status', optionally filter by 'category' to see only one type of change. For 'diff', optionally set 'max_diff_lines' to limit output size (default 500). Optionally filter by 'path' to narrow results to specific files. Use this to review what has changed before or after commits, or to understand the commit history.",
+            "parameters": {
+                "type": "object",
+                "required": ["view_type"],
+                "properties": {
+                    "view_type": {
+                        "type": "string",
+                        "description": "What to view: 'status' for a summary of changed files, 'diff' for actual file diffs, 'log' for commit history",
+                        "enum": ["status", "diff", "log"]
+                    },
+                    "path": {
+                        "type": "string",
+                        "description": "Optional file path filter — only show changes for files whose path contains this substring"
+                    },
+                    "max_count": {
+                        "type": "integer",
+                        "description": "Maximum number of commits to return when view_type is 'log' (default: 10)"
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "For view_type='status': filter to only this category of changes. If not set, all categories are shown.",
+                        "enum": ["added", "modified", "deleted", "unchanged"]
+                    },
+                    "max_diff_lines": {
+                        "type": "integer",
+                        "description": "For view_type='diff': maximum number of lines per diff. Larger diffs are truncated to show the head and tail, with a truncation marker. Set to 0 for no limit (default: 500)"
+                    }
+                }
+            }
+        }
+    }
+}

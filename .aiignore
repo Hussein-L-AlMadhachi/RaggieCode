@@ -1,0 +1,38 @@
+# .aiignore - Controls which files the Raggie code indexer ignores.
+# Uses the same pattern syntax as .gitignore.
+# If this file exists, it is used instead of .gitignore for indexing.
+# If it does not exist, the indexer falls back to .gitignore.
+
+# Build artifacts
+dist/
+build/
+
+# Virtual environments
+.venv/
+
+# IDE / editor
+.vscode/
+.idea/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Environment files
+.env
+.env.local
+.env.*
+
+# Database files
+*.db
+
+# Raggie internal
+.raggie/
+.code_index.raggie
+.raggie.chat
+
+# Misc
+TODO.md
+*.raggieflow
+*.workflow
+*.egg-info/

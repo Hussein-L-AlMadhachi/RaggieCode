@@ -1,0 +1,40 @@
+{
+    "code":{
+        "tools": [
+            "UglyWholeFileContentDump",
+            "ListDir",
+            "Shell",
+            "ShellBackground",
+            "ShellKill",
+            "WriteFile",
+            "ReplaceText",
+            "RemoveFile",
+            "GetSymbolSourceCode",
+            "GetFileCodeSemantics",
+            "WalkCallTree",
+            "SetSkill",
+            "GetSkill",
+            "SearchAllFilesContent",
+            "WebFetch",
+            "WebSearch",
+            "DispatchSubagent",
+            "CreateTodoList",
+            "AddTask",
+            "GetTodoList",
+            "ApproveTodoList",
+            "ExecuteNextTask",
+            "MarkTaskComplete",
+            "MarkTaskFailed",
+            "MarkTaskCancelled",
+            "GetActiveTodoList",
+            "ViewChanges",
+            "AskUser"
+        ],
+        "model": "glm-5-turbo",
+        "base_url": "https://api.z.ai/api/paas/v4/",
+        "system_prompt_file": "coder_system_prompt.md",
+        "context_window": 1000000,
+        "reasoning": false,
+        "stream": false
+    }
+}

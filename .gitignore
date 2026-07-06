@@ -1,0 +1,17 @@
+*.db
+__pycache__/
+*.pyc
+TODO.md
+.env
+.env.local
+.env.*
+.venv/
+.vscode/
+dist/
+*.raggieflow
+*.workflow
+build/
+.raggie/
+.code_index.raggie
+.raggie.chat
+*.egg-info/
