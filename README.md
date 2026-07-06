@@ -26,7 +26,7 @@ Raggie doesn't grep for strings and guess. It parses your codebase with **tree-s
 
 ### It can plan before it acts
 
-Give Raggie a complex task like "migrate the database from SQLite to PostgreSQL" and it won't just start editing files blindly. Itm can create a **todo list**, breaks the work into ordered steps, shows you the plan, and waits for your y/n approval before touching anything. Then it executes each step sequentially via **isolated subagents**. one task at a time, never in parallel, with full context carried forward.
+Give Raggie a complex task like "migrate the database from SQLite to PostgreSQL" and it won't just start editing files blindly. It can create a **todo list**, breaks the work into ordered steps, shows you the plan, and waits for your y/n approval before touching anything. Then it executes each step sequentially via **isolated subagents**. one task at a time, never in parallel, with full context carried forward.
 
 ### Almost never loses context
 
