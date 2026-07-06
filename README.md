@@ -1,6 +1,6 @@
-# Raggie Code v0.1.1
+# Raggie Code 
 
-> *Raggie means "watermelon". and like a real watermelon, it's bigger on the inside.*
+> *Raggie Code v0.1.1 (beta)*
 
 **Raggie** is an autonomous AI coding agent that doesn't just read your codebase. it *understands* it.
 
