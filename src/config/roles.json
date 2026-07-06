@@ -28,7 +28,8 @@
             "MarkTaskCancelled",
             "GetActiveTodoList",
             "ViewChanges",
-            "AskUser"
+            "AskUser",
+            "FileNameSearch"
         ],
         "model": "glm-5-turbo",
         "base_url": "https://api.z.ai/api/paas/v4/",
