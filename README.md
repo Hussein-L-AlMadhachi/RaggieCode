@@ -2,8 +2,8 @@
 
 > *Raggie Code v0.1.1 (beta)*
 
-<p align="center">
-  <img src="Raggie.png" alt="Raggie" width="512">
+<p style="padding:30px 50px;">
+  <img src="Raggie.png" alt="Raggie" width="312">
 </p>
 
 **Raggie** is an autonomous AI coding agent that doesn't just read your codebase. it *understands* it.
