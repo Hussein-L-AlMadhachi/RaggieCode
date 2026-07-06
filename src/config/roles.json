@@ -34,7 +34,7 @@
         "model": "glm-5-turbo",
         "base_url": "https://api.z.ai/api/paas/v4/",
         "system_prompt_file": "coder_system_prompt.md",
-        "context_window": 1000000,
+        "context_window": 200000,
         "reasoning": false,
         "stream": false
     }
