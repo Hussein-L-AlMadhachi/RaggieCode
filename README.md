@@ -129,6 +129,12 @@ This guided wizard walks you through:
 1. Adding your API keys
 2. Reviewing agent roles (model, base URL)
 
+### Start the agent
+
+```bash
+raggie code myproject
+```
+
 ---
 
 ## Quick Start
@@ -144,8 +150,8 @@ You'll be prompted to add API keys and review your agent roles in one seamless f
 ### 2. Run the agent
 
 ```bash
-# Single prompt mode (in current directory)
-raggie code . --prompt "Write a hello world function in Python"
+# Single prompt mode (in a new project)
+raggie code myproject --prompt "Write a hello world function in Python"
 
 # Single prompt mode (in a specific project)
 raggie code /path/to/project --prompt "Write a hello world function in Python"
@@ -153,8 +159,6 @@ raggie code /path/to/project --prompt "Write a hello world function in Python"
 # Interactive mode (chat loop)
 raggie code /path/to/project
 
-# Interactive mode in current directory
-raggie code .
 ```
 
 In interactive mode:

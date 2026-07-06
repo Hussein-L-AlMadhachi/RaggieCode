@@ -28,11 +28,11 @@ class CommandRegistry:
     def try_handle(self, prompt, agent):
         command = ""
         args = ""
-        if not " " in prompt:
-            command = prompt
-        elif len(prompt) >= 1 and prompt[0] == "!":
+        if len(prompt) >= 1 and prompt[0] == "!":
             command = "!"
             args = prompt[1:].strip()
+        elif not " " in prompt:
+            command = prompt
         else:
             command = prompt[:prompt.index(" ")]
             args = prompt[prompt.index(" ") + 1:].strip()
