@@ -28,7 +28,7 @@ Raggie doesn't grep for strings and guess. It parses your codebase with **tree-s
 
 Give Raggie a complex task like "migrate the database from SQLite to PostgreSQL" and it won't just start editing files blindly. Itm can create a **todo list**, breaks the work into ordered steps, shows you the plan, and waits for your y/n approval before touching anything. Then it executes each step sequentially via **isolated subagents**. one task at a time, never in parallel, with full context carried forward.
 
-### It never loses context
+### Almost never loses context
 
 When the LLM's context window fills up mid-task, Raggie doesn't just truncate and hope. It performs an **automatic session handover**: the agent generates a detailed handover document covering the original goal, current state, decisions made, changes applied, test results, errors encountered, and the exact next step. then spins up a fresh session that picks up the work seamlessly. You can also resume interrupted todo lists and converations across sessions.
 
