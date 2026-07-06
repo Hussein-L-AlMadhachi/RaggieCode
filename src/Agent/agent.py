@@ -605,7 +605,7 @@ class Agent:
             "9. User constraints and preferences\n"
             "10. Things the next agent must not repeat\n"
             "11. Exact next step you would take\n"
-            "12. References to relevant message, tool call file paths.\n"
+            "12. References relevant message, tool call and file paths.\n"
             "13. Things the next agent must not repeat\n\n"
             "Be specific. Do not write vague phrases like \"continue debugging\" without explaining where and how."
         )
