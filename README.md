@@ -103,13 +103,13 @@ Every tool call is displayed in real time with its arguments. Debug mode (`--deb
 ### From pip (GitHub)
 
 ```bash
-pip install git+https://github.com/hussein-l-almadhachi/raggie.git
+pip install git+https://github.com/Hussein-L-AlMadhachi/RaggieCode.git
 ```
 
 ### From source
 
 ```bash
-git clone https://github.com/hussein-l-almadhachi/raggie.git
+git clone https://github.com/Hussein-L-AlMadhachi/RaggieCode.git
 cd raggie
 pip install .
 ```
