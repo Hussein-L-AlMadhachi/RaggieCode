@@ -2,6 +2,10 @@
 
 > *Raggie Code v0.1.1 (beta)*
 
+<p align="center">
+  <img src="Raggie.png" alt="Raggie" width="512">
+</p>
+
 **Raggie** is an autonomous AI coding agent that doesn't just read your codebase. it *understands* it.
 
 Most AI coding assistants dump file contents into a prompt and hope for the best. Raggie is different. It builds a **code semantic index** of your entire codebase, navigates **call graphs**, traces **dependency chains**, and uses that structural understanding to make surgical, context-aware changes. not blind edits.
