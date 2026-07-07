@@ -1,4 +1,3 @@
-import os
 from .utils import is_ignored_by_gitignore, is_within_cwd, BLUE, RESET, auto_record_change, reindex_after_change
 
 

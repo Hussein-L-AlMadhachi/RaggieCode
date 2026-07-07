@@ -1,4 +1,3 @@
-from typing import Optional
 from .utils import BLUE, RESET, GREEN, YELLOW, RED, GRAY
 
 
@@ -178,7 +177,7 @@ def handle_approve_todo_list(arguments, toolcall_id, parent_session_id=None):
 
 def handle_execute_next_task(arguments, toolcall_id, parent_session_id=None):
     """Execute the next pending task in the todo list by dispatching a subagent."""
-    from Agent.chat_history_db import get_next_pending_task, update_task_status, update_todo_list_status, get_todo_list, get_todo_tasks, delete_todo_list, get_session_files
+    from Agent.chat_history_db import get_next_pending_task, update_task_status, get_todo_list, get_todo_tasks, delete_todo_list, get_session_files
     from Tools.dispatch_subagent import handle as dispatch_handle
     
     todo_list_id = arguments.get("todo_list_id")
@@ -293,7 +292,7 @@ def handle_execute_next_task(arguments, toolcall_id, parent_session_id=None):
 
 def handle_mark_task_complete(arguments, toolcall_id, parent_session_id=None):
     """Manually mark a task as completed."""
-    from Agent.chat_history_db import update_task_status, get_todo_tasks, get_todo_list, delete_todo_list
+    from Agent.chat_history_db import update_task_status, get_todo_tasks, delete_todo_list
 
     task_id = arguments.get("task_id")
     todo_list_id = arguments.get("todo_list_id")

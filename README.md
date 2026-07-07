@@ -89,6 +89,7 @@ Every tool call is displayed in real time with its arguments. Debug mode (`--deb
 - [In-Chat Commands](#in-chat-commands)
 - [Architecture](#architecture)
 - [Configuration](#configuration)
+- [Using Local AI](#using-local-ai)
 - [Tools Reference](#tools-reference)
 - [Skills System](#skills-system)
 - [Todo List System](#todo-list-system)
@@ -234,13 +235,13 @@ First-time setup wizard. Guides you through configuring API keys and reviewing a
 
 Manage API keys via an interactive menu. Keys are stored in `~/.config/raggie/keys.json`.
 
-Options: Add key, Remove key, Exit.
+Options: Add key, Remove key, Exit (press `q`).
 
 ### `raggie roles`
 
 List and edit agent roles via an interactive menu. Roles are stored in `~/.config/raggie/roles.json`.
 
-Options: Edit role's base URL / model, Exit.
+Options: Edit role's base URL / model, Exit (press `q`).
 
 ### `raggie skill [role]`
 
@@ -254,7 +255,7 @@ Skills for role 'code'
   1. testing: Always write tests after implementing. Use pytest.
   2. refactoring: When refactoring, preserve behavior.
 ------------------------------------------------------------
-0. Exit
+q. Exit
 1. View skill content
 2. Delete skill
 3. Export skill to file
@@ -433,6 +434,132 @@ Raggie uses ignore patterns to determine which files are off-limits. If a `.aiig
 When `.aiignore` is active, files matched by its patterns cannot be read, written, modified, or indexed by the agent. This gives you a single file to control what the agent sees and touches, independently of your git configuration.
 
 `.aiignore` uses the same pattern syntax as `.gitignore`.
+
+---
+
+## Using Local AI
+
+Raggie works with any OpenAI-compatible local LLM server. Below are setup guides for the most popular options.
+
+### Ollama
+
+[Ollama](https://ollama.com) runs models locally with a built-in OpenAI-compatible endpoint.
+
+1. **Install Ollama**: Follow the instructions at [ollama.com](https://ollama.com)
+2. **Pull a model that supports tool calling** (not all models do):
+   ```bash
+   ollama pull qwen2.5:14b
+   # or
+   ollama pull llama3.1:8b
+   ```
+3. **Start the Ollama server** (it usually starts automatically):
+   ```bash
+   ollama serve
+   ```
+4. **Configure Raggie** — edit `~/.config/raggie/roles.json`:
+   ```json
+   {
+     "code": {
+       "model": "qwen2.5:14b",
+       "base_url": "http://localhost:11434/v1/",
+       "tools": ["..."],
+       "system_prompt_file": "coder_system_prompt.md",
+       "context_window": 32768,
+       "reasoning": false,
+       "stream": false
+     }
+   }
+   ```
+5. **Set the API key to `nokey`** — edit `~/.config/raggie/keys.json`:
+   ```json
+   {
+     "http://localhost:11434/v1/": "nokey"
+   }
+   ```
+   Raggie sees `nokey` and passes an empty API key to the client, which Ollama ignores.
+6. **Run Raggie**:
+   ```bash
+   raggie code myproject
+   ```
+
+> **Note:** `context_window` should match the model's actual context length. For example, `qwen2.5:14b` supports 32768 tokens. Set this too high and the handover logic won't trigger when it should.
+
+### vLLM
+
+[vLLM](https://github.com/vllm-project/vllm) is a high-throughput inference engine with an OpenAI-compatible server.
+
+1. **Install vLLM**:
+   ```bash
+   pip install vllm
+   ```
+2. **Start the server** with a tool-calling model:
+   ```bash
+   vllm serve Qwen/Qwen2.5-14B-Instruct --enable-auto-tool-choice --tool-call-parser hermes
+   ```
+3. **Configure Raggie** — edit `~/.config/raggie/roles.json`:
+   ```json
+   {
+     "code": {
+       "model": "Qwen/Qwen2.5-14B-Instruct",
+       "base_url": "http://localhost:8000/v1/",
+       "tools": ["..."],
+       "system_prompt_file": "coder_system_prompt.md",
+       "context_window": 32768,
+       "reasoning": false,
+       "stream": false
+     }
+   }
+   ```
+4. **Set the API key to `nokey`** — edit `~/.config/raggie/keys.json`:
+   ```json
+   {
+     "http://localhost:8000/v1/": "nokey"
+   }
+   ```
+5. **Run Raggie**:
+   ```bash
+   raggie code myproject
+   ```
+
+### LM Studio
+
+[LM Studio](https://lmstudio.ai) provides a desktop GUI for running local models with an OpenAI-compatible server.
+
+1. **Install LM Studio** from [lmstudio.ai](https://lmstudio.ai)
+2. **Download a model** that supports tool calling (e.g. Qwen2.5, Llama 3.1)
+3. **Start the local server**: In LM Studio, go to the "Local Server" tab, load your model, and click "Start Server". The default endpoint is `http://localhost:1234/v1/`
+4. **Configure Raggie** — edit `~/.config/raggie/roles.json`:
+   ```json
+   {
+     "code": {
+       "model": "qwen2.5-14b-instruct",
+       "base_url": "http://localhost:1234/v1/",
+       "tools": ["..."],
+       "system_prompt_file": "coder_system_prompt.md",
+       "context_window": 32768,
+       "reasoning": false,
+       "stream": false
+     }
+   }
+   ```
+   > The `model` name must match what LM Studio shows as the loaded model identifier.
+5. **Set the API key to `nokey`** — edit `~/.config/raggie/keys.json`:
+   ```json
+   {
+     "http://localhost:1234/v1/": "nokey"
+   }
+   ```
+6. **Run Raggie**:
+   ```bash
+   raggie code myproject
+   ```
+
+### General Notes for Local AI
+
+- **Tool calling is required**: Raggie relies on function/tool calling. Not all models support this. Known good options include Qwen2.5 (7B+), Llama 3.1 (8B+), and Mistral (7B+). If the model doesn't support tool calls, Raggie won't be able to use its tools.
+- **Context window**: Set `context_window` in `roles.json` to match the model's actual context length. This controls when the automatic handover kicks in. Too high = handover never triggers (API errors). Too low = handover triggers too often (wasted tokens).
+- **Streaming**: Set `"stream": false` for local models. Streaming with tool calling can be unreliable with some local servers.
+- **The `nokey` convention**: Any `base_url` in `keys.json` with the value `"nokey"` tells Raggie to skip authentication and pass an empty key to the OpenAI client.
 
 ---
 

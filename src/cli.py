@@ -1,6 +1,5 @@
 import argparse
 import sys
-from pathlib import Path
 
 KNOWN_COMMANDS = {"skill", "roles", "keys", "setup"}
 

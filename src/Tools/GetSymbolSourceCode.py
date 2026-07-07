@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from RAG.find import find_symbol_implementation
 from .utils import is_within_cwd, BLUE, RESET
 

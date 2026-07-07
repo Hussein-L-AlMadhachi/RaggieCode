@@ -5,24 +5,16 @@ Indexes files in a codebase and tracks functions, classes, variables, methods, a
 Supports multiple languages: Python, Go, C#, JavaScript, TypeScript, Rust, Zig, Elixir, C++, PHP
 """
 
-import hashlib
 import json
 import os
-import sqlite3
-import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from tree_sitter import Language, Parser
 import xxhash
 
 from indexing.language_config import (
     LANGUAGE_CONFIG,
-    get_language_for_extension,
-    get_extensions_for_languages,
-    is_language_available,
-    get_node_types
 )
-from indexing.node_utils import create_parser, extract_imports
+from indexing.node_utils import create_parser
 from indexing.file_utils import (
     detect_language,
     collect_files_to_index,

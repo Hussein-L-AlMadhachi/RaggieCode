@@ -8,9 +8,7 @@ import json
 import os
 import sys
 from pathlib import Path
-from prompt_toolkit import prompt
 from rich.console import Console
-from rich.markdown import Markdown
 
 console = Console()
 GREEN = "\033[32m"
@@ -58,7 +56,7 @@ def handle_roles_command():
                 print(f"     Reasoning:      {reasoning}")
                 print(f"     Streaming:      {streaming}")
         print()
-        print("0. Exit")
+        print("q. Exit")
         print("1. Edit role's base URL / model")
         print()
 
@@ -118,18 +116,61 @@ def handle_roles_command():
             if new_model:
                 role['model'] = new_model
 
-            try:
-                new_url = input(f"Base URL [{role.get('base_url', '')}]: ").strip()
-            except KeyboardInterrupt:
-                print()
-                return
-            except EOFError:
-                print()
-                return
+            # Base URL selection from keys.json
+            keys = load_keys()
+            key_urls = list(keys.keys())
+            current_url = role.get('base_url', '')
 
+            if key_urls:
+                print(f"\nAvailable base URLs (from your keys):")
+                for i, url in enumerate(key_urls, 1):
+                    marker = " (current)" if url == current_url else ""
+                    print(f"  {i}. {url}{marker}")
+                print(f"  0. Enter a custom URL")
+                print()
+                try:
+                    url_choice = input(f"Select base URL (or press Enter to keep current): ").strip()
+                except KeyboardInterrupt:
+                    print()
+                    return
+                except EOFError:
+                    print()
+                    return
 
-            if new_url:
-                role['base_url'] = new_url
+                if url_choice == "":
+                    pass
+                elif url_choice == "0":
+                    try:
+                        new_url = input(f"Base URL [{current_url}]: ").strip()
+                    except KeyboardInterrupt:
+                        print()
+                        return
+                    except EOFError:
+                        print()
+                        return
+                    if new_url:
+                        role['base_url'] = new_url
+                else:
+                    try:
+                        url_idx = int(url_choice)
+                    except ValueError:
+                        print("Invalid selection, keeping current base URL.")
+                        url_idx = -1
+                    if url_idx >= 1 and url_idx <= len(key_urls):
+                        role['base_url'] = key_urls[url_idx - 1]
+                    elif url_idx != -1:
+                        print("Invalid selection, keeping current base URL.")
+            else:
+                try:
+                    new_url = input(f"Base URL [{current_url}] (no keys configured, run 'raggie keys' first): ").strip()
+                except KeyboardInterrupt:
+                    print()
+                    return
+                except EOFError:
+                    print()
+                    return
+                if new_url:
+                    role['base_url'] = new_url
 
             try:
                 new_ctx = input(f"Context Window [{role.get('context_window', '')}]: ").strip()
@@ -180,7 +221,7 @@ def handle_roles_command():
             save_roles(roles)
             print(f"Role '{role_name}' updated.")
 
-        elif choice == "0":
+        elif choice == "q":
             break
         else:
             print("Invalid choice.")
@@ -200,7 +241,7 @@ def handle_keys_command():
             for i, (url, key) in enumerate(keys.items(), 1):
                 print(f"  {i}. {url} -> {mask_key(key)}")
         print()
-        print("0. Exit")
+        print("q. Skip")
         print("1. Add key")
         print("2. Remove key")
         print()
@@ -262,7 +303,7 @@ def handle_keys_command():
                 json.dump(keys, f, indent=2)
             print(f"Key for {removed} removed.")
 
-        elif choice == "0":
+        elif choice == "q":
             break
         else:
             print("Invalid choice.")
@@ -398,7 +439,7 @@ def _skill_interactive_menu(manager, role_filter=None):
                 else:
                     print(f"  {i}. {r}/{n}: {s}")
         print()
-        print("0. Exit")
+        print("q. Exit")
         print("1. View skill content")
         print("2. Delete skill")
         print("3. Export skill to file")
@@ -415,7 +456,7 @@ def _skill_interactive_menu(manager, role_filter=None):
             print()
             return
 
-        if choice == "0":
+        if choice == "q":
             break
 
         elif choice == "1":
@@ -602,7 +643,12 @@ def main():
             chat_id = create_chat(args.role)
     
     # Create agent with the selected chat
-    agent = Agent(args.role, chat_id=chat_id, debug=args.debug)
+    try:
+        agent = Agent(args.role, chat_id=chat_id, debug=args.debug)
+    except Exception as e:
+        print(f"\nError: {e}", file=sys.stderr)
+        print("\nRun 'raggie setup' to configure your roles and API keys.", file=sys.stderr)
+        sys.exit(1)
     
     # Setup tools and commands
     setup_toolcalls(agent.tool_registry)

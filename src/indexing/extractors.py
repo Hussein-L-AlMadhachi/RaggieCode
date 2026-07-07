@@ -15,7 +15,6 @@ from indexing.node_utils import (
     extract_field_text,
     extract_go_receiver,
     extract_go_type_name,
-    extract_go_type_kind,
     count_branches
 )
 

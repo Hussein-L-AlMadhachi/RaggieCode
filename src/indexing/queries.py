@@ -4,11 +4,10 @@ Query mixin for CodeIndexSDK.
 All get_* and search_* methods that read entities from the SQLite index.
 """
 
-import sqlite3
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 
 from indexing.models import (
-    Location, Function, Class, Variable, TypeAlias,
+    Function, Class, Variable, TypeAlias,
     Struct, Interface, Enum, Namespace, File, Dependency,
 )
 

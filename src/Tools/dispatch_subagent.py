@@ -1,6 +1,4 @@
-import sys
-from typing import Optional
-from .utils import BLUE, RED, RESET
+from .utils import BLUE, RESET
 
 # Safety limits
 MAX_SUBAGENT_DEPTH = 3
@@ -78,7 +76,7 @@ def handle(arguments, toolcall_id, parent_session_id=None, skip_depth_check=Fals
             }
     
     try:
-        from Agent.chat_history_db import get_latest_session, create_chat, get_or_create_session, get_changes_by_session, get_session_role
+        from Agent.chat_history_db import create_chat, get_or_create_session, get_changes_by_session, get_session_role
         from Agent.agent import Agent
         from Tools import setup_toolcalls
         from Commands import setup_commands
@@ -106,12 +104,14 @@ def handle(arguments, toolcall_id, parent_session_id=None, skip_depth_check=Fals
             for event_type, *event_data in subagent.start(prompt=prompt):
                 if event_type == "response":
                     output_parts.append(event_data[0])
+                elif event_type == "response_end":
+                    output_parts.append(event_data[0])
                 elif event_type == "error":
                     output_parts.append(f"Error: {event_data[0]}")
                     error_occurred = True
                     break
-                elif event_type == "tool_call":
-                    print(f"{RED}Warning: Unhandled tool_call event in subagent dispatch: {event_data}{RESET}")
+                # tool_call, response_chunk, reasoning, reasoning_chunk are
+                # informational — tool execution happens internally in the agent
         except Exception as e:
             output_parts.append(f"Subagent execution failed: {str(e)}")
             error_occurred = True

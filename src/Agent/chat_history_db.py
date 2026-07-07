@@ -4,7 +4,6 @@ import json
 import re
 from pathlib import Path
 from typing import List, Dict, Optional
-from datetime import datetime
 from prompt_toolkit import prompt
 
 

@@ -1,5 +1,4 @@
 from pathlib import Path
-import os
 
 from .utils import is_ignored_by_gitignore, is_within_cwd, BLUE, RESET
 

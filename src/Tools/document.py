@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from RAG.document import update_symbol_description, get_symbol_description
 from .utils import is_within_cwd, BLUE, RESET
 

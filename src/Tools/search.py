@@ -1,4 +1,3 @@
-import os
 from ripgrep_rs import search
 from .utils import is_within_cwd
 

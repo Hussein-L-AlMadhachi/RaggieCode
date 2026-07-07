@@ -1,8 +1,6 @@
 import os
 from dulwich import repo
-from dulwich import index
 from dulwich import objects
-from dulwich.client import get_transport_and_path
 from datetime import datetime
 
 RED = "\033[31m"

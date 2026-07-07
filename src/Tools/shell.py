@@ -1,7 +1,6 @@
 import os
 import re
 import subprocess
-from pathlib import Path
 
 from .utils import is_ignored_by_gitignore, is_within_cwd, BLUE, RESET, reindex_after_change
 

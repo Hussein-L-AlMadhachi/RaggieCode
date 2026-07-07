@@ -2,7 +2,6 @@
 Utility functions for working with tree-sitter nodes.
 """
 
-from tree_sitter import Language, Parser
 
 
 def get_node_location(node):
@@ -534,7 +533,6 @@ def extract_imports(node, source_code, language, root_dir=None):
 def _is_external_import(import_text, language, root_dir):
     """Determine if an import is external (not part of the codebase)."""
     from pathlib import Path
-    import os
     
     root_path = Path(root_dir)
     

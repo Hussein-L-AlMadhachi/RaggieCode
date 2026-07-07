@@ -1,5 +1,4 @@
 import os
-import subprocess
 from pathlib import Path
 from functools import lru_cache
 from pathspec import PathSpec

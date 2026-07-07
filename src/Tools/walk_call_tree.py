@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from RAG.graph import walk_call_tree
 from .utils import is_within_cwd, BLUE, RESET
 

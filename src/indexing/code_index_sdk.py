@@ -12,8 +12,7 @@ from typing import List, Dict, Optional, Any, Union
 from dataclasses import asdict
 
 from indexing.models import (
-    Location, Function, Class, Variable, TypeAlias,
-    Struct, Interface, File, Dependency,
+    Function, Class, File, Dependency,
 )
 from indexing.queries import QueryMixin, DescriptionMixin
 

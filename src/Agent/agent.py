@@ -3,7 +3,6 @@ import json
 import shutil
 import platform
 from datetime import date
-from pathlib import Path
 
 from openai import OpenAI
 from rich.console import Console
@@ -46,7 +45,11 @@ class Agent:
         keys = load_keys()
         api_key = keys.get(base_url, "")
         if not api_key:
-            raise ValueError(f"No API key found for base_url '{base_url}' in keys.json")
+            raise ValueError(
+                f"No API key found for base_url '{base_url}' in your keys. make sure you used the correct urls in roles and keys section when you ran `raggie setup` "
+                f"If your model doesn't require a key (e.g. local AI), set it to 'nokey'."
+            )
+
 
         self.client = OpenAI(api_key=api_key, base_url=base_url)
 
