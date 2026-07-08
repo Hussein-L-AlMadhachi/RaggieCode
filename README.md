@@ -22,7 +22,7 @@ It runs locally. Your code index, chat history, and git repo never leave your ma
 
 Raggie doesn't grep for strings and guess. It parses your codebase with **tree-sitter**. the same parser engine used by Neovim, GitHub code search, and tree-sitter's own language grammars. It tracks all dependencies and all dependents (something tree-sitter alone cannot do), letting the agent analyze the blast radius of each change by knowing what calls what, what imports what, and where every symbol lives. When you ask it to "refactor the auth middleware," it traces the call tree, finds every caller, and updates them all.
 
-**12 languages supported:** Python, JavaScript, TypeScript, Go, Rust, C, C++, C#, PHP, Elixir, Zig, and more.
+**15 languages supported:** Python, Go, C#, JavaScript, TypeScript, TSX, Rust, Zig, Elixir, C, C++, PHP, Dart, Java, and Kotlin.
 
 ### It can plan before it acts
 
@@ -71,7 +71,7 @@ Every tool call is displayed in real time with its arguments. Debug mode (`--deb
 | **Human-in-the-loop** | `AskUser` tool for mid-task questions. Todo list approval gates. `SetSkill` requires user consent |
 | **31 tools** | Code exploration, file I/O, shell (foreground + background), web search/fetch, and more |
 | **`.gitignore` / `.aiignore` enforcement** | Ignored files are invisible to the agent. can't read, write, modify, or index them. Use `.aiignore` to control this independently of git |
-| **12+ languages** | Python, JavaScript, TypeScript, Go, Rust, C, C++, C#, PHP, Elixir, Zig, and more |
+| **15 languages** | Python, Go, C#, JavaScript, TypeScript, TSX, Rust, Zig, Elixir, C, C++, PHP, Dart, Java, Kotlin |
 | **Any OpenAI-compatible LLM** | Works with OpenAI, DeepSeek, OpenRouter, Ollama, vLLM, LocalAI, and anything else that speaks the OpenAI API |
 | **Persistent chat history** | SQLite-backed sessions, messages, skills, and todo lists. all survive across restarts |
 | **Project customization** | `AGENTS.md` for project conventions, `roles.json` for model/tool configuration, skills for persistent instructions |
@@ -712,7 +712,27 @@ At startup and after every tool call, Raggie indexes your codebase using tree-si
 
 ### Supported languages
 
-Python, JavaScript, TypeScript, Go, Rust, C, C++, C#, PHP, Elixir, Zig, and more.
+The code indexer supports 15 programming languages via tree-sitter grammars:
+
+| Language | Extensions | What gets indexed |
+|---|---|---|
+| **Python** | `.py` | Functions, classes, methods, imports, variables, type aliases, docstrings, branches |
+| **Go** | `.go` | Functions, methods (with receivers), structs, interfaces, type aliases, imports |
+| **C#** | `.cs` | Methods, constructors, classes, records, interfaces, structs, enums, namespaces, properties, using directives |
+| **JavaScript** | `.js`, `.jsx` | Functions, generator functions, classes, methods, imports, variables (var/let/const) |
+| **TypeScript** | `.ts` | Functions, classes (incl. abstract), interfaces, type aliases, enums, public fields, imports |
+| **TSX** | `.tsx` | Same as TypeScript, with JSX support |
+| **Rust** | `.rs` | Functions, structs, enums, traits, impl blocks, constants, statics, type aliases, use declarations |
+| **Zig** | `.zig` | Functions, variable declarations (const/var), `@import` calls |
+| **Elixir** | `.ex`, `.exs` | `def`/`defp`/`defmacro` functions, `defmodule` modules, alias imports, assignments |
+| **C** | `.c`, `.h` | Functions, structs, enums, typedefs, `#include` directives, macros |
+| **C++** | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.h`, `.hxx` | Functions, classes, structs, enums, type aliases, `#include` directives, macros |
+| **PHP** | `.php` | Functions, methods, classes, interfaces, `use`/`include`/`require` imports |
+| **Dart** | `.dart` | Function signatures, getters/setters, constructors, classes, mixins, extensions, imports |
+| **Java** | `.java` | Methods, constructors, classes, records, annotation types, interfaces, enums, imports |
+| **Kotlin** | `.kt`, `.kts` | Functions, classes, objects, interfaces, enums, type aliases, imports |
+
+Languages are gracefully skipped if their tree-sitter grammar is not installed.
 
 ### Data location
 

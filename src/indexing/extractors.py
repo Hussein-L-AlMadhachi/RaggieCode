@@ -28,7 +28,7 @@ def extract_function_info(node, source_code, language, class_node_type):
     docstring = extract_docstring(node, source_code, language)
     
     # Count branches in function body
-    branch_count = count_branches(node, language)
+    branch_count = count_branches(node, language, source_code)
     
     # Handle Go method receivers
     receiver = None

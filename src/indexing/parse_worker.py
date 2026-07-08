@@ -231,7 +231,25 @@ def _extract_symbols(root_node, source_code, language, file_path, root_dir,
                     func_info['parent_class_id'] = current_class_id
                 func_index = len(functions)
                 functions.append(func_info)
-                _extract_deps(node, source_code, language, dependencies, func_index)
+                # Dart: function_signature and function_body are siblings.
+                # Extract deps from both the signature and its sibling body.
+                if language == "dart" and node.parent:
+                    body = None
+                    found_self = False
+                    for sibling in node.parent.children:
+                        if sibling is node:
+                            found_self = True
+                            continue
+                        if found_self and sibling.type == "function_body":
+                            body = sibling
+                            break
+                    if body:
+                        _extract_deps(node, source_code, language, dependencies, func_index)
+                        _extract_deps(body, source_code, language, dependencies, func_index)
+                    else:
+                        _extract_deps(node, source_code, language, dependencies, func_index)
+                else:
+                    _extract_deps(node, source_code, language, dependencies, func_index)
             # Push children with in_function=True (reverse order for correct traversal)
             children = list(node.children)
             for child in reversed(children):
@@ -352,7 +370,7 @@ def _extract_symbols(root_node, source_code, language, file_path, root_dir,
                         "parameters": [],
                         "return_type": None,
                         "docstring": None,
-                        "branch_count": count_branches(node, language),
+                        "branch_count": count_branches(node, language, source_code),
                     }
                     func_index = len(functions)
                     functions.append(func_info)
@@ -578,7 +596,24 @@ def _process_class_body(class_node, source_code, language, class_id,
                 func_info['parent_class_id'] = class_id
                 func_index = len(functions)
                 functions.append(func_info)
-                _extract_deps(child, source_code, language, dependencies, func_index)
+                # Dart: method_signature and function_body are siblings in class_body
+                if language == "dart":
+                    body = None
+                    found_self = False
+                    for sibling in class_body.children:
+                        if sibling is child:
+                            found_self = True
+                            continue
+                        if found_self and sibling.type == "function_body":
+                            body = sibling
+                            break
+                    if body:
+                        _extract_deps(child, source_code, language, dependencies, func_index)
+                        _extract_deps(body, source_code, language, dependencies, func_index)
+                    else:
+                        _extract_deps(child, source_code, language, dependencies, func_index)
+                else:
+                    _extract_deps(child, source_code, language, dependencies, func_index)
         elif class_type and child.type in class_type:
             nested_class_info = extract_class_info(child, source_code, language)
             if nested_class_info:

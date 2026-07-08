@@ -337,24 +337,39 @@ def extract_variable_name(node, source_code, language):
                 name = extract_node_text(left_node, source_code)
             elif left_node.type == "member_expression":
                 return extract_node_text(left_node, source_code), True  # Return as attribute
-    elif language in ["java", "kotlin", "dart"]:
+    elif language in ["java", "dart"]:
         left_node = node.child_by_field_name("left")
         if left_node:
             if left_node.type in ["identifier", "simple_identifier"]:
                 name = extract_node_text(left_node, source_code)
             elif left_node.type in ["member_expression", "field_access_expression", "navigation_expression"]:
                 return extract_node_text(left_node, source_code), True
+    elif language == "kotlin":
+        # Kotlin assignment: directly_assignable_expression wraps simple_identifier
+        for child in node.children:
+            if child.type == "directly_assignable_expression":
+                for grandchild in child.children:
+                    if grandchild.type in ["simple_identifier", "identifier"]:
+                        name = extract_node_text(grandchild, source_code)
+                        break
+                break
+            elif child.type in ["simple_identifier", "identifier"]:
+                name = extract_node_text(child, source_code)
+                break
     elif language == "zig":
-        # Zig assignment: left side is an identifier
-        left_node = node.child_by_field_name("left")
-        if left_node:
-            if left_node.type == "identifier":
-                name = extract_node_text(left_node, source_code)
+        # Zig variable_declaration: const/var identifier = value
+        # The identifier is a direct child, not a 'left' field
+        for child in node.children:
+            if child.type == "identifier":
+                name = extract_node_text(child, source_code)
+                break
     elif language == "elixir":
-        # Elixir match: left side can be an identifier
-        left_node = node.child_by_field_name("left")
-        if left_node:
-            if left_node.type == "identifier":
+        # Elixir: binary_operator with = is an assignment
+        # Only treat as assignment if operator is "="
+        op_node = node.child_by_field_name("operator")
+        if op_node and extract_node_text(op_node, source_code) == "=":
+            left_node = node.child_by_field_name("left")
+            if left_node and left_node.type == "identifier":
                 name = extract_node_text(left_node, source_code)
     
     return name, False
@@ -435,7 +450,7 @@ def extract_go_type_kind(node, source_code):
     return "type_alias"
 
 
-def count_branches(node, language):
+def count_branches(node, language, source_code=None):
     """Count the number of conditional branches in a function body (iterative)."""
     branch_count = 0
     
@@ -449,20 +464,31 @@ def count_branches(node, language):
         'rust': ['if_expression', 'for_expression', 'while_expression', 'loop_expression', 'match_expression', 'if_let_expression', 'while_let_expression'],
         'cpp': ['if_statement', 'for_statement', 'range_based_for_statement', 'while_statement', 'switch_statement', 'try_statement', 'do_statement'],
         'zig': ['if_statement', 'for_statement', 'while_statement', 'switch_statement'],
-        'elixir': ['if', 'case', 'cond', 'try', 'receive', 'for', 'with', 'unless'],
+        'elixir': ['call'],
         'php': ['if_statement', 'for_statement', 'foreach_statement', 'while_statement', 'switch_statement', 'try_statement', 'match_expression'],
-        'dart': ['if_statement', 'for_statement', 'for_in_statement', 'while_statement', 'switch_statement', 'try_statement'],
+        'dart': ['if_statement', 'for_statement', 'while_statement', 'switch_statement', 'try_statement'],
         'java': ['if_statement', 'for_statement', 'enhanced_for_statement', 'while_statement', 'switch_statement', 'try_statement', 'try_with_resources_statement', 'do_statement'],
-        'kotlin': ['if_expression', 'for_statement', 'while_statement', 'do_while_statement', 'when_statement', 'try_expression']
+        'kotlin': ['if_expression', 'for_statement', 'while_statement', 'do_while_statement', 'when_expression', 'try_expression']
     }
     
     lang_branch_types = branch_types.get(language, ['if_statement', 'for_statement', 'while_statement', 'switch_statement'])
+    
+    elixir_branch_keywords = {'if', 'case', 'cond', 'try', 'receive', 'for', 'with', 'unless'}
     
     stack = [node]
     while stack:
         n = stack.pop()
         if n.type in lang_branch_types:
-            branch_count += 1
+            if language == 'elixir' and n.type == 'call':
+                first_ident = None
+                for child in n.children:
+                    if child.type == 'identifier':
+                        first_ident = extract_node_text(child, source_code)
+                        break
+                if first_ident in elixir_branch_keywords:
+                    branch_count += 1
+            else:
+                branch_count += 1
         stack.extend(reversed(list(n.children)))
     
     return branch_count
@@ -482,9 +508,9 @@ def extract_imports(node, source_code, language, root_dir=None):
         'rust': ['use_declaration', 'extern_crate_declaration'],
         'cpp': ['include_directive', 'preproc_include'],
         'c': ['include_directive', 'preproc_include'],
-        'zig': ['use'],
-        'elixir': ['import', 'alias', 'require', 'use'],
-        'php': ['include_expression', 'require_expression', 'use_statement'],
+        'zig': ['builtin_function'],
+        'elixir': ['alias'],
+        'php': ['include_expression', 'include_once_expression', 'require_expression', 'require_once_expression', 'namespace_use_declaration'],
         'dart': ['import_or_export'],
         'java': ['import_declaration'],
         'kotlin': ['import_header']
@@ -496,6 +522,12 @@ def extract_imports(node, source_code, language, root_dir=None):
     while stack:
         n = stack.pop()
         if n.type in lang_import_types:
+            # Zig: only @import builtin_function calls are imports
+            if language == "zig" and n.type == "builtin_function":
+                text = extract_node_text(n, source_code)
+                if not text.startswith("@import"):
+                    stack.extend(reversed(list(n.children)))
+                    continue
             # Go: import_declaration may contain import_spec_list with multiple import_spec
             if language == "go" and n.type == "import_declaration":
                 specs = []
@@ -628,7 +660,7 @@ def _is_external_import(import_text, language, root_dir):
     
     elif language == 'php':
         # PHP: include/require with relative paths are internal
-        if import_text.startswith('include ') or import_text.startswith('require '):
+        if import_text.startswith(('include ', 'include_once ', 'require ', 'require_once ')):
             # Extract the path
             parts = import_text.split()
             if len(parts) >= 2:
@@ -702,15 +734,16 @@ def _is_external_import(import_text, language, root_dir):
     
     elif language == 'elixir':
         # Elixir: alias MyApp.Foo is internal if lib/my_app/foo.ex exists
-        if import_text.startswith('alias '):
-            parts = import_text.split()
-            if len(parts) >= 2:
-                module_name = parts[1].rstrip('.')
-                # Convert CamelCase to snake_case path
-                import re
-                snake = re.sub('([A-Z]+)', r'_\1', module_name).lower().lstrip('_')
-                if (root_path / 'lib' / snake.replace('.', '/')).exists():
-                    return False
+        # The import text is just the module path (e.g. "Plug.Conn")
+        module_name = import_text.strip().rstrip('.')
+        if module_name:
+            import re
+            s1 = re.sub('([a-z0-9])([A-Z])', r'\1_\2', module_name)
+            s2 = re.sub('([A-Z]+)([A-Z][a-z])', r'\1_\2', s1)
+            snake = s2.lower()
+            base_path = root_path / 'lib' / snake.replace('.', '/')
+            if base_path.exists() or base_path.with_suffix('.ex').exists():
+                return False
     
     return True  # Default to external
 
@@ -737,10 +770,10 @@ def extract_function_calls(node, source_code, language):
         'rust': ['call_expression'],
         'cpp': ['call_expression'],
         'c': ['call_expression'],
-        'zig': ['call_expr'],
+        'zig': ['call_expression'],
         'elixir': ['call'],
         'php': ['function_call_expression'],
-        'dart': ['call_expression', 'method_call_expression', 'function_call_expression'],
+        'dart': ['expression_statement'],
         'java': ['method_invocation', 'object_creation_expression'],
         'kotlin': ['call_expression']
     }
@@ -753,6 +786,40 @@ def extract_function_calls(node, source_code, language):
         if n.type in lang_call_types:
             func_name = None
             dep_type = 'function_call'
+            
+            # Dart: expression_statement with identifier + selector(arguments)
+            if language == 'dart' and n.type == 'expression_statement':
+                has_args = False
+                method_name = None
+                first_ident = None
+                for child in n.children:
+                    if child.type == 'identifier' and first_ident is None:
+                        first_ident = extract_node_text(child, source_code)
+                    elif child.type == 'selector':
+                        for sel_child in child.children:
+                            if sel_child.type == 'argument_part':
+                                for arg_child in sel_child.children:
+                                    if arg_child.type == 'arguments':
+                                        has_args = True
+                                        break
+                            elif sel_child.type == 'unconditional_assignable_selector':
+                                for us_child in sel_child.children:
+                                    if us_child.type == 'identifier':
+                                        method_name = extract_node_text(us_child, source_code)
+                if has_args:
+                    if method_name:
+                        func_name = method_name
+                        dep_type = 'method_call'
+                    elif first_ident:
+                        func_name = first_ident
+                        dep_type = 'function_call'
+                if func_name:
+                    calls.append({
+                        'name': func_name,
+                        'location': get_node_location(n),
+                        'dependency_type': dep_type
+                    })
+                continue
             
             # Try to extract the function name from the call expression
             for child in n.children:
@@ -928,7 +995,7 @@ def extract_class_references(node, source_code, language):
                         break
         
         elif language == 'dart':
-            if n.type == 'new_expression' or n.type == 'object_creation_expression':
+            if n.type in ('constructor_invocation', 'const_object_expression'):
                 for child in n.children:
                     if child.type in ['identifier', 'type_identifier']:
                         name = extract_node_text(child, source_code)
@@ -987,6 +1054,7 @@ def extract_variable_references(node, source_code, language):
     
     skip_types = {'function_definition', 'class_definition', 'function_declaration',
                   'class_declaration', 'method_declaration', 'parameter', 'assignment',
+                  'variable_declaration',
                   'function_signature', 'method_signature', 'constructor_declaration',
                   'function_item', 'struct_item', 'enum_item', 'trait_item'}
     
