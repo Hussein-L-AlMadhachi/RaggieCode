@@ -1,6 +1,6 @@
 # Raggie Code 
 
-> *Raggie Code v0.1.1 (beta)*
+> *Raggie Code v0.1.3 (beta)*
 
 <p style="padding:30px 50px;">
   <img src="Raggie.png" alt="Raggie" width="312">
