@@ -15,26 +15,30 @@ except ImportError:
     go_language = None
 
 try:
-    from tree_sitter_language_pack import get_language
-    c_sharp_language = get_language('c_sharp')
+    from tree_sitter_language_pack import get_language as csharp_language_pack
+
+    c_sharp_language = csharp_language_pack("csharp")
 except ImportError:
     c_sharp_language = None
 
 try:
-    from tree_sitter_language_pack import get_language
-    javascript_language = get_language('javascript')
+    from tree_sitter_language_pack import get_language as javascript_language_pack
+
+    javascript_language = javascript_language_pack("javascript")
 except ImportError:
     javascript_language = None
 
 try:
-    from tree_sitter_language_pack import get_language
-    typescript_language = get_language('typescript')
+    from tree_sitter_language_pack import get_language as typescript_language_pack
+
+    typescript_language = typescript_language_pack("typescript")
 except ImportError:
     typescript_language = None
 
 try:
-    from tree_sitter_language_pack import get_language
-    tsx_language = get_language('tsx')
+    from tree_sitter_language_pack import get_language as tsx_language_pack
+
+    tsx_language = tsx_language_pack("tsx")
 except ImportError:
     tsx_language = None
 
@@ -69,20 +73,23 @@ except ImportError:
     php_language = None
 
 try:
-    from tree_sitter_language_pack import get_language
-    dart_language = get_language('dart')
+    from tree_sitter_language_pack import get_language as dart_language_pack
+
+    dart_language = dart_language_pack("dart")
 except ImportError:
     dart_language = None
 
 try:
-    from tree_sitter_language_pack import get_language
-    java_language = get_language('java')
+    from tree_sitter_language_pack import get_language as java_language_pack
+
+    java_language = java_language_pack("java")
 except ImportError:
     java_language = None
 
 try:
-    from tree_sitter_language_pack import get_language
-    kotlin_language = get_language('kotlin')
+    from tree_sitter_language_pack import get_language as kotlin_language_pack
+
+    kotlin_language = kotlin_language_pack("kotlin")
 except ImportError:
     kotlin_language = None
 
@@ -95,8 +102,8 @@ LANGUAGE_CONFIG = {
             "function": ["function_definition"],
             "class": ["class_definition"],
             "assignment": ["assignment"],
-            "type_alias": ["type_alias"]
-        }
+            "type_alias": ["type_alias"],
+        },
     },
     "go": {
         "extensions": [".go"],
@@ -108,8 +115,8 @@ LANGUAGE_CONFIG = {
             "interface": ["type_declaration"],
             "method": ["method_declaration"],
             "assignment": ["assignment_statement", "short_var_declaration"],
-            "type_alias": ["type_declaration"]
-        }
+            "type_alias": ["type_declaration"],
+        },
     },
     "csharp": {
         "extensions": [".cs"],
@@ -119,21 +126,29 @@ LANGUAGE_CONFIG = {
             "class": ["class_declaration", "record_declaration", "record_struct_declaration"],
             "assignment": ["assignment_expression"],
             "type_alias": None,
-            "public_field": ["property_declaration", "event_declaration", "event_field_declaration"],
+            "public_field": [
+                "property_declaration",
+                "event_declaration",
+                "event_field_declaration",
+            ],
             "interface": ["interface_declaration"],
             "struct": ["struct_declaration"],
-            "enum": ["enum_declaration"]
-        }
+            "enum": ["enum_declaration"],
+        },
     },
     "javascript": {
         "extensions": [".js", ".jsx"],
         "language_module": javascript_language,
         "node_types": {
-            "function": ["function_declaration", "generator_function_declaration", "method_definition"],
+            "function": [
+                "function_declaration",
+                "generator_function_declaration",
+                "method_definition",
+            ],
             "class": ["class_declaration"],
             "assignment": ["assignment_expression", "lexical_declaration", "variable_declaration"],
-            "type_alias": None
-        }
+            "type_alias": None,
+        },
     },
     "typescript": {
         "extensions": [".ts"],
@@ -146,8 +161,8 @@ LANGUAGE_CONFIG = {
             "type_alias": ["type_alias_declaration"],
             "method": ["method_definition"],
             "public_field": ["public_field_definition"],
-            "enum": ["enum_declaration"]
-        }
+            "enum": ["enum_declaration"],
+        },
     },
     "tsx": {
         "extensions": [".tsx"],
@@ -160,8 +175,8 @@ LANGUAGE_CONFIG = {
             "type_alias": ["type_alias_declaration"],
             "method": ["method_definition"],
             "public_field": ["public_field_definition"],
-            "enum": ["enum_declaration"]
-        }
+            "enum": ["enum_declaration"],
+        },
     },
     "rust": {
         "extensions": [".rs"],
@@ -173,8 +188,8 @@ LANGUAGE_CONFIG = {
             "enum": ["enum_item"],
             "interface": ["trait_item"],
             "assignment": ["let_declaration"],
-            "type_alias": ["type_item"]
-        }
+            "type_alias": ["type_item"],
+        },
     },
     "zig": {
         "extensions": [".zig"],
@@ -183,8 +198,8 @@ LANGUAGE_CONFIG = {
             "function": ["FnProto"],
             "class": None,
             "assignment": ["assignment_statement"],
-            "type_alias": None
-        }
+            "type_alias": None,
+        },
     },
     "elixir": {
         "extensions": [".ex", ".exs"],
@@ -193,8 +208,8 @@ LANGUAGE_CONFIG = {
             "function": ["anonymous_function"],
             "class": None,
             "assignment": ["match"],
-            "type_alias": None
-        }
+            "type_alias": None,
+        },
     },
     "cpp": {
         "extensions": [".cpp", ".cc", ".cxx", ".hpp", ".h", ".hxx"],
@@ -205,8 +220,8 @@ LANGUAGE_CONFIG = {
             "struct": ["struct_specifier"],
             "enum": ["enum_specifier"],
             "assignment": ["assignment_expression"],
-            "type_alias": ["type_alias_declaration", "alias_declaration"]
-        }
+            "type_alias": ["type_alias_declaration", "alias_declaration"],
+        },
     },
     "c": {
         "extensions": [".c", ".h"],
@@ -217,8 +232,8 @@ LANGUAGE_CONFIG = {
             "struct": ["struct_specifier"],
             "enum": ["enum_specifier"],
             "assignment": ["declaration"],
-            "type_alias": ["type_definition"]
-        }
+            "type_alias": ["type_definition"],
+        },
     },
     "php": {
         "extensions": [".php"],
@@ -228,18 +243,24 @@ LANGUAGE_CONFIG = {
             "class": ["class_declaration"],
             "interface": ["interface_declaration"],
             "assignment": ["assignment_expression"],
-            "type_alias": None
-        }
+            "type_alias": None,
+        },
     },
     "dart": {
         "extensions": [".dart"],
         "language_module": dart_language,
         "node_types": {
-            "function": ["function_signature", "getter_signature", "setter_signature", "constructor_signature", "method_signature"],
+            "function": [
+                "function_signature",
+                "getter_signature",
+                "setter_signature",
+                "constructor_signature",
+                "method_signature",
+            ],
             "class": ["class_definition", "mixin_declaration", "extension_declaration"],
             "assignment": ["assignment_expression"],
-            "type_alias": ["type_alias"]
-        }
+            "type_alias": ["type_alias"],
+        },
     },
     "java": {
         "extensions": [".java"],
@@ -250,8 +271,8 @@ LANGUAGE_CONFIG = {
             "interface": ["interface_declaration"],
             "enum": ["enum_declaration"],
             "assignment": ["assignment_expression"],
-            "type_alias": None
-        }
+            "type_alias": None,
+        },
     },
     "kotlin": {
         "extensions": [".kt", ".kts"],
@@ -262,9 +283,9 @@ LANGUAGE_CONFIG = {
             "interface": ["interface_declaration"],
             "enum": ["enum_declaration"],
             "assignment": ["assignment_expression"],
-            "type_alias": ["type_alias"]
-        }
-    }
+            "type_alias": ["type_alias"],
+        },
+    },
 }
 
 
