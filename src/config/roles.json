@@ -4,7 +4,7 @@
             "UglyWholeFileContentDump",
             "ListDir",
             "Shell",
-            "ShellBackground",
+            "TempBackgroundService",
             "ShellKill",
             "WriteFile",
             "ReplaceText",
@@ -29,13 +29,15 @@
             "GetActiveTodoList",
             "ViewChanges",
             "AskUser",
-            "FileNameSearch"
+            "FileNameSearch",
+            "EditSymbol"
         ],
         "model": "",
         "base_url": "",
         "system_prompt_file": "coder_system_prompt.md",
         "context_window": 200000,
         "reasoning": false,
-        "stream": false
+        "stream": false,
+        "globalTodo": true
     }
 }

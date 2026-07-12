@@ -30,6 +30,9 @@ def handle(arguments, toolcall_id):
             result = "\n".join(lines)
         else:
             result = explore_code_structure(file_path, include_bodies=include_bodies)
+            if result.startswith("Error: File not found in database"):
+                with open(file_path, "r") as f:
+                    result = f.read()
     except Exception as e:
         result = f"Error exploring code structure: {str(e)}"
 

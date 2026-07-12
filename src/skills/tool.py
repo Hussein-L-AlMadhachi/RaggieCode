@@ -104,6 +104,16 @@ def handle(args, tool_call_id, agent_role=None):
                 "content": f"Error {action}ing skill: {str(e)}"
             }
     else:
+        try:
+            reason = input(f"Reason for refusal (optional, press Enter to skip): ").strip()
+        except (KeyboardInterrupt, EOFError):
+            reason = ""
+        if reason:
+            return {
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": f"Skill {action} rejected by user. Reason: {reason}"
+            }
         return {
             "role": "tool",
             "tool_call_id": tool_call_id,

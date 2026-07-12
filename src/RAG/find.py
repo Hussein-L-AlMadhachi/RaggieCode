@@ -77,6 +77,67 @@ def get_undocumented_symbols(symbol_types: list = None, file_path: str = None) -
         return f"Error getting undocumented symbols: {str(e)}"
 
 
+def find_symbol_location(symbol_name: str, file_path: str = None):
+    """Find the file path, line range, and current source of a symbol.
+
+    Args:
+        symbol_name: Name of the symbol to find
+        file_path: Optional file path to disambiguate same-name symbols
+
+    Returns:
+        dict with keys: file_path, start_line, end_line, source, kind
+        or None if not found
+    """
+    db_path = Path.cwd() / ".raggie" / ".code_index.raggie"
+
+    if not db_path.exists():
+        return None
+
+    try:
+        with CodeIndexSDK(str(db_path)) as sdk:
+            file_id = None
+            if file_path:
+                f = sdk.get_file_by_path(file_path)
+                if f:
+                    file_id = f.id
+
+            # Try function first
+            funcs = sdk.get_function_by_name(symbol_name, file_id)
+            if funcs:
+                func = funcs[0]
+                if len(funcs) > 1:
+                    impls = [m for m in funcs if m.parent_type == 'class']
+                    if impls:
+                        func = impls[0]
+                source = sdk._read_source_lines(func.file_id, func.location.start_line, func.location.end_line)
+                if source is not None:
+                    return {
+                        "file_path": func.file_path,
+                        "start_line": func.location.start_line,
+                        "end_line": func.location.end_line,
+                        "source": source,
+                        "kind": "function",
+                    }
+
+            # Try class
+            classes = sdk.get_class_by_name(symbol_name, file_id)
+            if classes:
+                cls = classes[0]
+                source = sdk._read_source_lines(cls.file_id, cls.location.start_line, cls.location.end_line)
+                if source is not None:
+                    return {
+                        "file_path": cls.file_path,
+                        "start_line": cls.location.start_line,
+                        "end_line": cls.location.end_line,
+                        "source": source,
+                        "kind": "class",
+                    }
+
+            return None
+    except Exception:
+        return None
+
+
 def find_symbol_implementation(symbol_name: str, file_path: str = None) -> str:
     """Find and return the source implementation of a symbol (function or class).
 

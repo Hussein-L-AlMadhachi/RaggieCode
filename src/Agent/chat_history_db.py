@@ -40,6 +40,9 @@ def init_db():
             chat_id INTEGER NOT NULL,
             parent_session_id INTEGER,
             redirect_session_id INTEGER,
+            toolcall_id TEXT,
+            effort INTEGER,
+            depth INTEGER DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE,
@@ -48,11 +51,17 @@ def init_db():
         )
     """)
 
-    # Migrate old sessions table: add redirect_session_id column if missing
+    # Migrate old sessions table: add missing columns
     cursor.execute("PRAGMA table_info(sessions)")
     session_columns = [col[1] for col in cursor.fetchall()]
     if "redirect_session_id" not in session_columns:
         cursor.execute("ALTER TABLE sessions ADD COLUMN redirect_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL")
+    if "toolcall_id" not in session_columns:
+        cursor.execute("ALTER TABLE sessions ADD COLUMN toolcall_id TEXT")
+    if "effort" not in session_columns:
+        cursor.execute("ALTER TABLE sessions ADD COLUMN effort INTEGER")
+    if "depth" not in session_columns:
+        cursor.execute("ALTER TABLE sessions ADD COLUMN depth INTEGER DEFAULT 0")
     
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS messages (
@@ -134,11 +143,21 @@ def init_db():
             context TEXT,
             status TEXT NOT NULL DEFAULT 'pending',
             order_index INTEGER NOT NULL,
+            toolcall_id TEXT,
+            cancel_reason TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (todo_list_id) REFERENCES todo_lists(id) ON DELETE CASCADE
         )
     """)
+
+    # Migrate old todo_tasks table: add toolcall_id column if missing
+    cursor.execute("PRAGMA table_info(todo_tasks)")
+    task_columns = [col[1] for col in cursor.fetchall()]
+    if "toolcall_id" not in task_columns:
+        cursor.execute("ALTER TABLE todo_tasks ADD COLUMN toolcall_id TEXT")
+    if "cancel_reason" not in task_columns:
+        cursor.execute("ALTER TABLE todo_tasks ADD COLUMN cancel_reason TEXT")
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS session_files (
@@ -377,15 +396,15 @@ def get_chat_role(chat_id: int) -> Optional[str]:
     return result[0] if result else None
 
 
-def create_session(chat_id: int, parent_session_id: Optional[int] = None) -> int:
+def create_session(chat_id: int, parent_session_id: Optional[int] = None, toolcall_id: Optional[str] = None, effort: Optional[int] = None, depth: int = 0) -> int:
     """Create a new session for a given chat and return its ID."""
     conn = _get_conn()
     cursor = conn.cursor()
     
     cursor.execute("""
-        INSERT INTO sessions (chat_id, parent_session_id)
-        VALUES (?, ?)
-    """, (chat_id, parent_session_id))
+        INSERT INTO sessions (chat_id, parent_session_id, toolcall_id, effort, depth)
+        VALUES (?, ?, ?, ?, ?)
+    """, (chat_id, parent_session_id, toolcall_id, effort, depth))
     
     session_id = cursor.lastrowid
     conn.commit()
@@ -395,13 +414,13 @@ def create_session(chat_id: int, parent_session_id: Optional[int] = None) -> int
 
 
 def get_latest_session(chat_id: int) -> Optional[int]:
-    """Get the most recent session ID for a given chat, or None if no sessions exist."""
+    """Get the most recent main-agent session ID for a given chat, or None if no sessions exist."""
     conn = _get_conn()
     cursor = conn.cursor()
     
     cursor.execute("""
         SELECT id FROM sessions
-        WHERE chat_id = ?
+        WHERE chat_id = ? AND parent_session_id IS NULL
         ORDER BY id DESC
         LIMIT 1
     """, (chat_id,))
@@ -412,11 +431,13 @@ def get_latest_session(chat_id: int) -> Optional[int]:
     return result[0] if result else None
 
 
-def get_or_create_session(chat_id: int, parent_session_id: Optional[int] = None) -> int:
+def get_or_create_session(chat_id: int, parent_session_id: Optional[int] = None, effort: Optional[int] = None) -> int:
     """Get the active session for a chat (following redirects), or create one if none exists."""
     session_id = get_active_session(chat_id)
     if session_id is None:
-        session_id = create_session(chat_id, parent_session_id)
+        session_id = create_session(chat_id, parent_session_id, effort=effort)
+    elif effort is not None:
+        set_session_effort(session_id, effort)
     return session_id
 
 
@@ -434,7 +455,10 @@ def save_message(session_id: int, message: Dict):
     
     content = message.get("content")
     if content is not None:
-        content = str(content)
+        if isinstance(content, (list, dict)):
+            content = json.dumps(content)
+        else:
+            content = str(content)
     else:
         content = ""
     
@@ -483,9 +507,19 @@ def load_messages(session_id: int) -> List[Dict]:
     
     messages = []
     for row in cursor.fetchall():
+        content_str = str(row[1]) if row[1] is not None else ""
+        try:
+            parsed = json.loads(content_str)
+            if isinstance(parsed, (list, dict)):
+                content = parsed
+            else:
+                content = content_str
+        except (json.JSONDecodeError, TypeError):
+            content = content_str
+
         message = {
             "role": str(row[0]) if row[0] is not None else "user",
-            "content": str(row[1]) if row[1] is not None else "",
+            "content": content,
         }
         
         # Parse tool_calls from JSON if present
@@ -548,6 +582,119 @@ def get_session_role(session_id: int) -> Optional[str]:
     result = cursor.fetchone()
     conn.close()
     return result[0] if result else None
+
+
+def is_subagent_session(session_id: int) -> bool:
+    """Check if a session is a subagent session (has a parent_session_id)."""
+    conn = _get_conn()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT parent_session_id FROM sessions WHERE id = ?
+    """, (session_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result is not None and result[0] is not None
+
+
+def get_child_sessions(parent_session_id: int) -> List[Dict]:
+    """Get all child (subagent) sessions for a given parent session, ordered by id ASC."""
+    conn = _get_conn()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, chat_id, parent_session_id
+        FROM sessions
+        WHERE parent_session_id = ?
+        ORDER BY id ASC
+    """, (parent_session_id,))
+    sessions = []
+    for row in cursor.fetchall():
+        sessions.append({
+            "id": row[0],
+            "chat_id": row[1],
+            "parent_session_id": row[2],
+        })
+    conn.close()
+    return sessions
+
+
+def get_child_session_by_toolcall(parent_session_id: int, toolcall_id: str) -> Optional[Dict]:
+    """Get the child (subagent) session matching a specific toolcall_id."""
+    conn = _get_conn()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, chat_id, parent_session_id, toolcall_id
+        FROM sessions
+        WHERE parent_session_id = ? AND toolcall_id = ?
+        LIMIT 1
+    """, (parent_session_id, toolcall_id))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "chat_id": row[1],
+        "parent_session_id": row[2],
+        "toolcall_id": row[3],
+    }
+
+
+def resolve_session_id(session_id: int) -> int:
+    """Follow the redirect_session_id chain to find the active session.
+
+    Returns the session_id itself if it has no redirect.
+    """
+    conn = _get_conn()
+    cursor = conn.cursor()
+    current_id = session_id
+    visited = set()
+    try:
+        while current_id is not None and current_id not in visited:
+            visited.add(current_id)
+            cursor.execute(
+                "SELECT redirect_session_id FROM sessions WHERE id = ?",
+                (current_id,),
+            )
+            result = cursor.fetchone()
+            if result and result[0] is not None:
+                current_id = result[0]
+            else:
+                break
+    finally:
+        conn.close()
+    return current_id
+
+
+def get_session_info(session_id: int) -> Optional[Dict]:
+    """Get session metadata: parent_session_id, toolcall_id, and depth."""
+    conn = _get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT parent_session_id, toolcall_id, depth FROM sessions WHERE id = ?",
+        (session_id,),
+    )
+    result = cursor.fetchone()
+    conn.close()
+    if not result:
+        return None
+    return {
+        "parent_session_id": result[0],
+        "toolcall_id": result[1],
+        "depth": result[2] or 0,
+    }
+
+
+def is_session_finished(session_id: int) -> bool:
+    """Check if a session has completed (last message is an assistant response without tool_calls).
+
+    Follows the redirect chain to check the active session.
+    """
+    active_id = resolve_session_id(session_id)
+    messages = load_messages(active_id)
+    if not messages:
+        return False
+    last_msg = messages[-1]
+    return last_msg.get("role") == "assistant" and not last_msg.get("tool_calls")
 
 
 def add_change(prompt_id: str, role: str, session_id: Optional[int], change_type: str, 
@@ -697,6 +844,43 @@ def get_changes_by_session(session_id: int) -> List[Dict]:
     return changes
 
 
+def get_all_changes_by_session_chain(session_id: int) -> List[Dict]:
+    """Get all changes across the session redirect chain.
+
+    When a session is handed over, changes are recorded on different sessions
+    in the chain. This function gathers them all.
+    """
+    conn = _get_conn()
+    cursor = conn.cursor()
+
+    # Collect all session IDs in the redirect chain
+    session_ids = [session_id]
+    current_id = session_id
+    visited = set()
+    try:
+        while current_id is not None and current_id not in visited:
+            visited.add(current_id)
+            cursor.execute(
+                "SELECT redirect_session_id FROM sessions WHERE id = ?",
+                (current_id,),
+            )
+            result = cursor.fetchone()
+            if result and result[0] is not None:
+                current_id = result[0]
+                session_ids.append(current_id)
+            else:
+                break
+    finally:
+        conn.close()
+
+    all_changes = []
+    for sid in session_ids:
+        all_changes.extend(get_changes_by_session(sid))
+
+    all_changes.sort(key=lambda c: c.get("timestamp", ""))
+    return all_changes
+
+
 def create_todo_list(session_id: int) -> int:
     """Create a new todo list for a session and return its ID."""
     conn = _get_conn()
@@ -714,22 +898,76 @@ def create_todo_list(session_id: int) -> int:
     return todo_list_id
 
 
-def add_todo_task(todo_list_id: int, goal: str, requirements: Optional[str] = None, 
-                  notes: Optional[str] = None, order_index: int = 0,
-                  context: Optional[str] = None) -> int:
-    """Add a task to a todo list and return its ID."""
+def add_todo_task(todo_list_id: int, goal: str, requirements: Optional[str] = None,
+                  notes: Optional[str] = None, order_index: int = None,
+                  context: Optional[str] = None, insert_after: Optional[int] = None) -> int:
+    """Add a task to a todo list and return its ID.
+
+    Position is controlled by insert_after (1-based display number):
+    - insert_after omitted / None → append at end
+    - insert_after = 0 → insert at the beginning (before task 1)
+    - insert_after = N → insert after task N (shifts subsequent tasks down)
+
+    order_index is deprecated and ignored if insert_after is provided.
+    """
     conn = _get_conn()
     cursor = conn.cursor()
-    
+
+    if insert_after is not None:
+        # Get current tasks ordered by order_index to map display number → order_index
+        cursor.execute("""
+            SELECT order_index FROM todo_tasks
+            WHERE todo_list_id = ?
+            ORDER BY order_index ASC
+        """, (todo_list_id,))
+        rows = cursor.fetchall()
+
+        if not rows:
+            # Empty list — insert at index 0
+            new_order_index = 0
+        elif insert_after >= len(rows):
+            # Insert after the last task — append at end
+            new_order_index = rows[-1][0] + 1
+        elif insert_after <= 0:
+            # Insert at the beginning
+            new_order_index = rows[0][0]
+            cursor.execute("""
+                UPDATE todo_tasks SET order_index = order_index + 1
+                WHERE todo_list_id = ?
+            """, (todo_list_id,))
+        else:
+            # Insert after task N (1-based): get the order_index of the Nth task
+            target_order_index = rows[insert_after - 1][0]
+            new_order_index = target_order_index + 1
+            # Shift all tasks after the target down by 1
+            cursor.execute("""
+                UPDATE todo_tasks SET order_index = order_index + 1
+                WHERE todo_list_id = ? AND order_index > ?
+            """, (todo_list_id, target_order_index))
+    elif order_index is not None:
+        # Legacy: explicit order_index with auto-shift
+        cursor.execute("""
+            UPDATE todo_tasks SET order_index = order_index + 1
+            WHERE todo_list_id = ? AND order_index >= ?
+        """, (todo_list_id, order_index))
+        new_order_index = order_index
+    else:
+        # Default: append at end
+        cursor.execute("""
+            SELECT MAX(order_index) FROM todo_tasks WHERE todo_list_id = ?
+        """, (todo_list_id,))
+        result = cursor.fetchone()
+        new_order_index = (result[0] + 1) if result and result[0] is not None else 0
+
     cursor.execute("""
         INSERT INTO todo_tasks (todo_list_id, goal, requirements, notes, context, status, order_index)
         VALUES (?, ?, ?, ?, ?, 'pending', ?)
-    """, (todo_list_id, goal, requirements, notes, context, order_index))
-    
+    """, (todo_list_id, goal, requirements, notes, context, new_order_index))
+
     task_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    
+
     return task_id
 
 
@@ -764,7 +1002,7 @@ def get_todo_tasks(todo_list_id: int) -> List[Dict]:
     cursor = conn.cursor()
     
     cursor.execute("""
-        SELECT id, goal, requirements, notes, context, status, order_index, created_at, updated_at
+        SELECT id, goal, requirements, notes, context, status, order_index, toolcall_id, cancel_reason, created_at, updated_at
         FROM todo_tasks
         WHERE todo_list_id = ?
         ORDER BY order_index ASC
@@ -780,8 +1018,10 @@ def get_todo_tasks(todo_list_id: int) -> List[Dict]:
             "context": row[4],
             "status": row[5],
             "order_index": row[6],
-            "created_at": row[7],
-            "updated_at": row[8]
+            "toolcall_id": row[7],
+            "cancel_reason": row[8],
+            "created_at": row[9],
+            "updated_at": row[10]
         })
     
     conn.close()
@@ -827,37 +1067,17 @@ def get_chat_id_for_session(session_id: int) -> Optional[int]:
     return result[0] if result else None
 
 
-def get_active_todo_list_for_chat(chat_id: int) -> Optional[Dict]:
-    """Get the active (pending, in_progress, or rejected) todo list for a chat.
-
-    Looks across all sessions belonging to the chat, so todo lists
-    created in a previous session (before handover or restart) are
-    still found for resumption.
-    """
+def migrate_todo_lists(old_session_id: int, new_session_id: int):
+    """Move all todo lists from old_session_id to new_session_id (used during handover)."""
     conn = _get_conn()
     cursor = conn.cursor()
-
     cursor.execute("""
-        SELECT tl.id, tl.session_id, tl.status, tl.created_at, tl.updated_at
-        FROM todo_lists tl
-        JOIN sessions s ON tl.session_id = s.id
-        WHERE s.chat_id = ? AND tl.status IN ('pending', 'in_progress', 'rejected')
-        ORDER BY tl.id DESC
-        LIMIT 1
-    """, (chat_id,))
-
-    result = cursor.fetchone()
+        UPDATE todo_lists
+        SET session_id = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE session_id = ?
+    """, (new_session_id, old_session_id))
+    conn.commit()
     conn.close()
-
-    if result:
-        return {
-            "id": result[0],
-            "session_id": result[1],
-            "status": result[2],
-            "created_at": result[3],
-            "updated_at": result[4]
-        }
-    return None
 
 
 def update_todo_list_status(todo_list_id: int, status: str):
@@ -875,17 +1095,24 @@ def update_todo_list_status(todo_list_id: int, status: str):
     conn.close()
 
 
-def update_task_status(task_id: int, status: str):
-    """Update the status of a task."""
+def update_task_status(task_id: int, status: str, cancel_reason: Optional[str] = None):
+    """Update the status of a task. Optionally store a cancel_reason when cancelling."""
     conn = _get_conn()
     cursor = conn.cursor()
-    
-    cursor.execute("""
-        UPDATE todo_tasks
-        SET status = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-    """, (status, task_id))
-    
+
+    if cancel_reason is not None:
+        cursor.execute("""
+            UPDATE todo_tasks
+            SET status = ?, cancel_reason = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (status, cancel_reason, task_id))
+    else:
+        cursor.execute("""
+            UPDATE todo_tasks
+            SET status = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        """, (status, task_id))
+
     conn.commit()
     conn.close()
 
@@ -912,21 +1139,39 @@ def delete_todo_list(todo_list_id: int):
 
 
 def get_next_pending_task(todo_list_id: int) -> Optional[Dict]:
-    """Get the next pending task for a todo list."""
+    """Get the next pending or in_progress task for a todo list.
+
+    Returns in_progress tasks first (for crash recovery resumption),
+    then pending tasks.
+    """
     conn = _get_conn()
     cursor = conn.cursor()
-    
+
+    # Check for an in_progress task first (crash recovery)
     cursor.execute("""
-        SELECT id, goal, requirements, notes, context, status, order_index, created_at, updated_at
+        SELECT id, goal, requirements, notes, context, status, order_index, toolcall_id, cancel_reason, created_at, updated_at
         FROM todo_tasks
-        WHERE todo_list_id = ? AND status = 'pending'
+        WHERE todo_list_id = ? AND status = 'in_progress'
         ORDER BY order_index ASC
         LIMIT 1
     """, (todo_list_id,))
-    
+
     result = cursor.fetchone()
+
+    if not result:
+        # No in_progress task — get the next pending one
+        cursor.execute("""
+            SELECT id, goal, requirements, notes, context, status, order_index, toolcall_id, cancel_reason, created_at, updated_at
+            FROM todo_tasks
+            WHERE todo_list_id = ? AND status = 'pending'
+            ORDER BY order_index ASC
+            LIMIT 1
+        """, (todo_list_id,))
+
+        result = cursor.fetchone()
+
     conn.close()
-    
+
     if result:
         return {
             "id": result[0],
@@ -936,10 +1181,24 @@ def get_next_pending_task(todo_list_id: int) -> Optional[Dict]:
             "context": result[4],
             "status": result[5],
             "order_index": result[6],
-            "created_at": result[7],
-            "updated_at": result[8]
+            "toolcall_id": result[7],
+            "cancel_reason": result[8],
+            "created_at": result[9],
+            "updated_at": result[10]
         }
     return None
+
+
+def set_task_toolcall_id(task_id: int, toolcall_id: str):
+    """Store the toolcall_id used when starting a task, for crash recovery resumption."""
+    conn = _get_conn()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE todo_tasks SET toolcall_id = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+    """, (toolcall_id, task_id))
+    conn.commit()
+    conn.close()
 
 
 def record_session_file(session_id: int, file_path: str, operation: str):
@@ -982,6 +1241,42 @@ def get_session_files(session_id: int) -> List[Dict]:
     return files
 
 
+def get_all_session_files_chain(session_id: int) -> List[Dict]:
+    """Get all file modifications across the session redirect chain.
+
+    When a session is handed over, file modifications are recorded on different
+    sessions in the chain. This function gathers them all.
+    """
+    conn = _get_conn()
+    cursor = conn.cursor()
+
+    session_ids = [session_id]
+    current_id = session_id
+    visited = set()
+    try:
+        while current_id is not None and current_id not in visited:
+            visited.add(current_id)
+            cursor.execute(
+                "SELECT redirect_session_id FROM sessions WHERE id = ?",
+                (current_id,),
+            )
+            result = cursor.fetchone()
+            if result and result[0] is not None:
+                current_id = result[0]
+                session_ids.append(current_id)
+            else:
+                break
+    finally:
+        conn.close()
+
+    all_files = []
+    for sid in session_ids:
+        all_files.extend(get_session_files(sid))
+
+    all_files.sort(key=lambda f: f.get("timestamp", ""))
+    return all_files
+
+
 def get_old_session_ids(chat_id: int, active_session_id: int) -> List[int]:
     """Get session IDs for a chat that precede the active session, ordered oldest first.
 
@@ -992,7 +1287,7 @@ def get_old_session_ids(chat_id: int, active_session_id: int) -> List[int]:
     cursor = conn.cursor()
     cursor.execute("""
         SELECT id FROM sessions
-        WHERE chat_id = ? AND id != ?
+        WHERE chat_id = ? AND id != ? AND parent_session_id IS NULL
         ORDER BY id ASC
     """, (chat_id, active_session_id))
     session_ids = [row[0] for row in cursor.fetchall()]
@@ -1011,6 +1306,35 @@ def set_redirect_session_id(session_id: int, redirect_session_id: int):
     """, (redirect_session_id, session_id))
     conn.commit()
     conn.close()
+
+
+def get_session_effort(session_id: int) -> Optional[int]:
+    """Get the effort level stored on a session."""
+    conn = _get_conn()
+    cursor = conn.cursor()
+    cursor.execute("SELECT effort FROM sessions WHERE id = ?", (session_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else None
+
+
+def set_session_effort(session_id: int, effort: int):
+    """Set the effort level on a session."""
+    conn = _get_conn()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE sessions SET effort = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (effort, session_id))
+    conn.commit()
+    conn.close()
+
+
+def get_session_depth(session_id: int) -> int:
+    """Get the depth stored on a session (0 for main sessions, increments for subagents)."""
+    conn = _get_conn()
+    cursor = conn.cursor()
+    cursor.execute("SELECT depth FROM sessions WHERE id = ?", (session_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result and result[0] is not None else 0
 
 
 def get_redirect_session_id(session_id: int) -> Optional[int]:
@@ -1034,10 +1358,10 @@ def get_active_session(chat_id: int) -> Optional[int]:
     conn = _get_conn()
     cursor = conn.cursor()
 
-    # Get the latest session for this chat
+    # Get the latest main-agent session for this chat (exclude subagent sessions)
     cursor.execute("""
         SELECT id, redirect_session_id FROM sessions
-        WHERE chat_id = ?
+        WHERE chat_id = ? AND parent_session_id IS NULL
         ORDER BY id DESC
         LIMIT 1
     """, (chat_id,))
@@ -1131,3 +1455,46 @@ def get_handovers_by_session(session_id: int) -> List[Dict]:
         })
     conn.close()
     return handovers
+
+
+def get_root_session_id(session_id: int) -> int:
+    """Traverse up the parent_session_id chain to find the root session.
+
+    Returns the session_id itself if it has no parent.
+    """
+    conn = _get_conn()
+    cursor = conn.cursor()
+    current_id = session_id
+    visited = set()
+    try:
+        while current_id is not None and current_id not in visited:
+            visited.add(current_id)
+            cursor.execute(
+                "SELECT parent_session_id FROM sessions WHERE id = ?",
+                (current_id,),
+            )
+            result = cursor.fetchone()
+            if result and result[0] is not None:
+                current_id = result[0]
+            else:
+                break
+    finally:
+        conn.close()
+    return current_id
+
+
+def is_global_todo_enabled(session_id: int) -> bool:
+    """Check if globalTodo is enabled for the role associated with this session."""
+    role = get_session_role(session_id)
+    if not role:
+        return False
+    from Agent.config import load_roles
+    roles = load_roles()
+    return roles.get(role, {}).get("globalTodo", False)
+
+
+def resolve_todo_session_id(session_id: int) -> int:
+    """If globalTodo is enabled, return the root session ID; otherwise return session_id."""
+    if is_global_todo_enabled(session_id):
+        return get_root_session_id(session_id)
+    return session_id

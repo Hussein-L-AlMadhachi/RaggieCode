@@ -3,7 +3,8 @@ from .utils import BLUE, RESET, GREEN, YELLOW, RED, GRAY
 
 def handle_create_todo_list(arguments, toolcall_id, parent_session_id=None):
     """Create a new todo list for the current session."""
-    from Agent.chat_history_db import create_todo_list
+    from Agent.chat_history_db import create_todo_list, get_session_effort, get_session_depth, resolve_todo_session_id
+    from Agent.effort_levels import is_depth_allowed, effort_name, effort_max_depth
     
     if parent_session_id is None:
         return {
@@ -12,9 +13,22 @@ def handle_create_todo_list(arguments, toolcall_id, parent_session_id=None):
             "content": "Error: parent_session_id is required to create a todo list",
         }
     
+    # When globalTodo is enabled, resolve to the root session so all subagents share one todo list
+    todo_session_id = resolve_todo_session_id(parent_session_id)
+    
+    effort = get_session_effort(parent_session_id)
+    depth = get_session_depth(parent_session_id)
+    if effort is not None and not is_depth_allowed(effort, depth):
+        max_d = effort_max_depth(effort)
+        return {
+            "role": "tool",
+            "tool_call_id": toolcall_id,
+            "content": f"Cannot create todo list: effort level '{effort_name(effort)}' limits todo list depth to {max_d}. Current session depth is {depth}. Handle the task directly without a todo list.",
+        }
+    
     try:
-        todo_list_id = create_todo_list(parent_session_id)
-        print(f"{BLUE}Created todo list {todo_list_id} for session {parent_session_id}{RESET}")
+        todo_list_id = create_todo_list(todo_session_id)
+        print(f"{BLUE}Created todo list {todo_list_id} for session {todo_session_id}{RESET}")
         return {
             "role": "tool",
             "tool_call_id": toolcall_id,
@@ -31,23 +45,24 @@ def handle_create_todo_list(arguments, toolcall_id, parent_session_id=None):
 def handle_add_task(arguments, toolcall_id, parent_session_id=None):
     """Add a task to a todo list."""
     from Agent.chat_history_db import add_todo_task
-    
+
     todo_list_id = arguments.get("todo_list_id")
     goal = arguments.get("goal")
     requirements = arguments.get("requirements")
     notes = arguments.get("notes")
     context = arguments.get("context")
-    order_index = arguments.get("order_index", 0)
-    
+    insert_after = arguments.get("insert_after")
+
     if not todo_list_id or not goal:
         return {
             "role": "tool",
             "tool_call_id": toolcall_id,
             "content": "Error: 'todo_list_id' and 'goal' are required parameters",
         }
-    
+
     try:
-        task_id = add_todo_task(todo_list_id, goal, requirements, notes, order_index, context)
+        task_id = add_todo_task(todo_list_id, goal, requirements, notes,
+                                context=context, insert_after=insert_after)
         print(f"{BLUE}Added task {task_id} to todo list {todo_list_id}: {goal[:50]}...{RESET}")
         return {
             "role": "tool",
@@ -98,6 +113,8 @@ def handle_get_todo_list(arguments, toolcall_id, parent_session_id=None):
                 output += f"   Notes: {task['notes']}\n"
             if task['context']:
                 output += f"{GRAY}   Context: {task['context']}\n{RESET}"
+            if task.get('cancel_reason'):
+                output += f"{YELLOW}   Cancel reason: {task['cancel_reason']}{RESET}\n"
             output += "\n"
         
         print(output)
@@ -176,9 +193,15 @@ def handle_approve_todo_list(arguments, toolcall_id, parent_session_id=None):
 
 
 def handle_execute_next_task(arguments, toolcall_id, parent_session_id=None):
-    """Execute the next pending task in the todo list by dispatching a subagent."""
-    from Agent.chat_history_db import get_next_pending_task, update_task_status, get_todo_list, get_todo_tasks, delete_todo_list, get_session_files
+    """Execute the next pending task in the todo list by dispatching a subagent.
+
+    If a task is already in_progress (from a crashed previous attempt),
+    it is resumed using the original toolcall_id so dispatch_subagent
+    can find and resume the existing child session.
+    """
+    from Agent.chat_history_db import get_next_pending_task, update_task_status, get_todo_list, get_todo_tasks, delete_todo_list, get_all_session_files_chain, set_task_toolcall_id, get_session_effort, get_session_depth
     from Tools.dispatch_subagent import handle as dispatch_handle
+    from Agent.effort_levels import is_depth_allowed, effort_name, effort_max_depth
     
     todo_list_id = arguments.get("todo_list_id")
     
@@ -188,6 +211,17 @@ def handle_execute_next_task(arguments, toolcall_id, parent_session_id=None):
             "tool_call_id": toolcall_id,
             "content": "Error: 'todo_list_id' is required",
         }
+    
+    if parent_session_id is not None:
+        effort = get_session_effort(parent_session_id)
+        depth = get_session_depth(parent_session_id)
+        if effort is not None and not is_depth_allowed(effort, depth):
+            max_d = effort_max_depth(effort)
+            return {
+                "role": "tool",
+                "tool_call_id": toolcall_id,
+                "content": f"Cannot execute todo list tasks: effort level '{effort_name(effort)}' limits todo list depth to {max_d}. Current session depth is {depth}. Handle remaining tasks directly without dispatching subagents.",
+            }
     
     try:
         # Check if todo list is approved before executing any task
@@ -206,7 +240,7 @@ def handle_execute_next_task(arguments, toolcall_id, parent_session_id=None):
                 "content": f"Error: Cannot execute tasks. Todo list {todo_list_id} has not been approved by the user. Current status: {todo_list['status']}. Please call ApproveTodoList first.",
             }
         
-        # Get the next pending task
+        # Get the next task — in_progress tasks are returned first (crash recovery)
         task = get_next_pending_task(todo_list_id)
         
         if not task:
@@ -219,9 +253,18 @@ def handle_execute_next_task(arguments, toolcall_id, parent_session_id=None):
                 "content": "All tasks completed. Todo list has been removed.",
             }
         
-        # Mark task as in_progress
-        update_task_status(task['id'], 'in_progress')
-        print(f"{BLUE}Executing task {task['order_index'] + 1}: {task['goal']}{RESET}")
+        is_resume = task['status'] == 'in_progress'
+        
+        if is_resume:
+            # Crash recovery: resume the existing subagent session using the original toolcall_id
+            print(f"{BLUE}Resuming task {task['order_index'] + 1}: {task['goal']}{RESET}")
+            dispatch_toolcall_id = task.get('toolcall_id') or toolcall_id
+        else:
+            # New task: mark as in_progress and store the toolcall_id for future recovery
+            update_task_status(task['id'], 'in_progress')
+            set_task_toolcall_id(task['id'], toolcall_id)
+            print(f"{BLUE}Executing task {task['order_index'] + 1}: {task['goal']}{RESET}")
+            dispatch_toolcall_id = toolcall_id
         
         # Get all tasks to build context of completed/cancelled tasks
         all_tasks = get_todo_tasks(todo_list_id)
@@ -255,17 +298,20 @@ def handle_execute_next_task(arguments, toolcall_id, parent_session_id=None):
         
         subagent_prompt = "\n".join(prompt_parts)
         
-        # Dispatch subagent
+        # Dispatch subagent (use original toolcall_id for resume so the child session is found)
         dispatch_args = {
             "prompt": subagent_prompt
         }
         
-        result = dispatch_handle(dispatch_args, toolcall_id, parent_session_id, skip_depth_check=True)
+        result = dispatch_handle(dispatch_args, dispatch_toolcall_id, parent_session_id, skip_depth_check=True)
         
         # Mark task as completed if subagent succeeded
         if result.get('role') == 'tool' and not result.get('content', '').startswith('Error'):
             update_task_status(task['id'], 'completed')
-            print(f"{GREEN}Task {task['order_index'] + 1} completed{RESET}")
+            if is_resume:
+                print(f"{GREEN}Task {task['order_index'] + 1} resumed and completed{RESET}")
+            else:
+                print(f"{GREEN}Task {task['order_index'] + 1} completed{RESET}")
         else:
             update_task_status(task['id'], 'failed')
             print(f"{RED}Task {task['order_index'] + 1} failed{RESET}")
@@ -273,7 +319,7 @@ def handle_execute_next_task(arguments, toolcall_id, parent_session_id=None):
         # Append list of files modified during the subagent session
         subagent_session_id = result.pop('subagent_session_id', None)
         if subagent_session_id is not None:
-            session_files = get_session_files(subagent_session_id)
+            session_files = get_all_session_files_chain(subagent_session_id)
             if session_files:
                 files_summary = "\n\nFiles modified in this task session:"
                 for sf in session_files:
@@ -364,25 +410,33 @@ def handle_mark_task_failed(arguments, toolcall_id, parent_session_id=None):
 
 
 def handle_mark_task_cancelled(arguments, toolcall_id, parent_session_id=None):
-    """Manually mark a task as cancelled."""
+    """Manually mark a task as cancelled. A reason is required."""
     from Agent.chat_history_db import update_task_status
-    
+
     task_id = arguments.get("task_id")
-    
+    reason = arguments.get("reason")
+
     if not task_id:
         return {
             "role": "tool",
             "tool_call_id": toolcall_id,
             "content": "Error: 'task_id' is required",
         }
-    
-    try:
-        update_task_status(task_id, 'cancelled')
-        print(f"{YELLOW}Task {task_id} marked as cancelled{RESET}")
+
+    if not reason or not reason.strip():
         return {
             "role": "tool",
             "tool_call_id": toolcall_id,
-            "content": f"Task {task_id} marked as cancelled",
+            "content": "Error: 'reason' is required when cancelling a task. Provide a brief explanation of why this task is being cancelled.",
+        }
+
+    try:
+        update_task_status(task_id, 'cancelled', cancel_reason=reason.strip())
+        print(f"{YELLOW}Task {task_id} marked as cancelled. Reason: {reason.strip()}{RESET}")
+        return {
+            "role": "tool",
+            "tool_call_id": toolcall_id,
+            "content": f"Task {task_id} marked as cancelled. Reason: {reason.strip()}",
         }
     except Exception as e:
         return {
@@ -393,8 +447,8 @@ def handle_mark_task_cancelled(arguments, toolcall_id, parent_session_id=None):
 
 
 def handle_get_active_todo_list(arguments, toolcall_id, parent_session_id=None):
-    """Get the active todo list for the current chat."""
-    from Agent.chat_history_db import get_active_todo_list_for_chat, get_chat_id_for_session
+    """Get the active todo list for the current session."""
+    from Agent.chat_history_db import get_active_todo_list, resolve_todo_session_id
 
     if parent_session_id is None:
         return {
@@ -403,15 +457,10 @@ def handle_get_active_todo_list(arguments, toolcall_id, parent_session_id=None):
             "content": "Error: parent_session_id is required",
         }
 
+    todo_session_id = resolve_todo_session_id(parent_session_id)
+
     try:
-        chat_id = get_chat_id_for_session(parent_session_id)
-        if chat_id is None:
-            return {
-                "role": "tool",
-                "tool_call_id": toolcall_id,
-                "content": "Error: could not determine chat for this session",
-            }
-        todo_list = get_active_todo_list_for_chat(chat_id)
+        todo_list = get_active_todo_list(todo_session_id)
         if todo_list:
             return {
                 "role": "tool",

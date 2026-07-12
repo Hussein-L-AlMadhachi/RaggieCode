@@ -1,0 +1,23 @@
+
+plan-define: chat1(@prompt) # initial plan definition
+
+plan-refine: chat2(chat1) ! chat1 # if proceed toolcall is not called redirect feedback to this
+plan-define: chat0("execute scripts in `script_file/`")
+
+@clear chat1
+chat5 = chat2 # complete chat history copy
+@clear chat2
+
+@router( chat1, chat2 ) : router1 #define where to route
+
+router: chat6[router1](chat5) # let the agent decide how to route dynamically through special route toolcal
+
+@shell: context_output = python3 get_context.py
+
+architect: chat3(chat2, context_output)
+coder: chat4(chat3)
+
+@shell: test_result = python3 run_tests.py
+test_result ! chat3
+
+@shell: deploy_result = python3 deploy.py

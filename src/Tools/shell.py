@@ -2,7 +2,7 @@ import os
 import re
 import subprocess
 
-from .utils import is_ignored_by_gitignore, is_within_cwd, BLUE, RESET, reindex_after_change
+from .utils import is_ignored_by_gitignore, is_within_cwd, BLUE, RESET, reindex_after_change, remove_em_dashes
 
 
 def _extract_paths(command):
@@ -81,6 +81,16 @@ def handle(arguments, toolcall_id, code_indexer=None):
 
         if confirmation.lower() != "y":
             print("Command execution cancelled by user.")
+            try:
+                reason = input(f"{BLUE}Reason for refusal (optional, press Enter to skip): {RESET}").strip()
+            except (KeyboardInterrupt, EOFError):
+                reason = ""
+            if reason:
+                return {
+                    "role": "tool",
+                    "tool_call_id": toolcall_id,
+                    "content": f"The user refused running this command. Reason: {reason}",
+                }
             return {
                 "role": "tool",
                 "tool_call_id": toolcall_id,
@@ -119,6 +129,7 @@ def handle(arguments, toolcall_id, code_indexer=None):
             else:
                 output = f"Command failed with exit code {result.returncode}\n{error_msg}"
 
+        output = remove_em_dashes(output)
         stripped = output.strip()
         if stripped:
             print(stripped)

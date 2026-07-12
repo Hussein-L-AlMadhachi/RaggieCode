@@ -11,7 +11,7 @@ from rich.markdown import Markdown
 from .config import load_roles, load_tools, load_keys
 from .tools import ToolRegistry
 from .command import CommandRegistry
-from .chat_history_db import init_db, get_or_create_session, load_messages, save_message, update_chat_title, generate_title, get_active_todo_list_for_chat, get_todo_tasks, create_session, set_redirect_session_id, save_handover, get_old_session_ids
+from .chat_history_db import init_db, get_or_create_session, load_messages, save_message, update_chat_title, generate_title, get_active_todo_list, get_todo_tasks, create_session, set_redirect_session_id, save_handover, get_old_session_ids, is_subagent_session, get_session_effort, get_session_info, resolve_session_id, migrate_todo_lists
 from .git_manager import GitManager
 from skills import SkillManager
 from indexing.code_index_sdk import CodeIndexSDK
@@ -68,15 +68,18 @@ class Agent:
         if session_id is None and chat_id is not None:
             self.session_id = get_or_create_session(chat_id, parent_session_id=None)
         elif session_id is not None:
-            self.session_id = session_id
+            self.session_id = resolve_session_id(session_id)
         else:
             raise ValueError("Either chat_id or session_id must be provided")
 
         # Load chat history from database
         self.chat_history = load_messages(self.session_id)
-        
+
         # Track if this is a new session (no messages yet)
         self.is_new_session = len(self.chat_history) == 0
+
+        # Track if this is a subagent session (skip git commit on finish)
+        self.is_subagent = is_subagent_session(self.session_id)
 
         # Inject system prompt if not already present (for new sessions)
         if self.is_new_session or not any(msg.get("role") == "system" for msg in self.chat_history):
@@ -102,8 +105,9 @@ class Agent:
             self.console.print("\n[yellow]Indexing interrupted. Using existing index.[/yellow]")
             self.code_indexer._connect()
 
-        # Display previous chat history if it exists
-        if self.chat_history:
+        # Display previous chat history if it exists (skip for subagents — they
+        # share the chat_id but don't need the parent's conversation printed)
+        if self.chat_history and not self.is_subagent:
             self._display_chat_history()
         
         # Check for incomplete todo list and offer resumption
@@ -242,9 +246,11 @@ class Agent:
         """Check for incomplete todo list and offer resumption."""
         from prompt_toolkit import prompt
         from Tools.utils import BLUE, GREEN, YELLOW, RED, RESET
-        
+        from Agent.chat_history_db import resolve_todo_session_id
+
         try:
-            active_todo = get_active_todo_list_for_chat(self.chat_id)
+            todo_session_id = resolve_todo_session_id(self.session_id)
+            active_todo = get_active_todo_list(todo_session_id)
             if active_todo and active_todo['status'] in ('pending', 'in_progress', 'rejected'):
                 tasks = get_todo_tasks(active_todo['id'])
                 pending_tasks = [t for t in tasks if t['status'] == 'pending']
@@ -266,7 +272,11 @@ class Agent:
                         print(f"{GREEN}Resuming todo list...{RESET}")
                         # The agent will need to call ExecuteNextTask to continue
                     else:
-                        print(f"{YELLOW}Skipping todo list resumption.{RESET}")
+                        reason = prompt(f"{YELLOW}Reason for skipping (optional, press Enter to skip): {RESET}").strip()
+                        if reason:
+                            print(f"{YELLOW}Skipping todo list resumption. Reason: {reason}{RESET}")
+                        else:
+                            print(f"{YELLOW}Skipping todo list resumption.{RESET}")
         except Exception as e:
             print(f"{RED}Warning: Failed to check for incomplete todo list: {e}{RESET}")
 
@@ -305,7 +315,38 @@ class Agent:
         if last_msg.get("role") == "tool":
             return True
 
+        # Vision messages (role "user" with tool_call_id) are also tool responses
+        if last_msg.get("role") == "user" and last_msg.get("tool_call_id"):
+            return True
+
         return last_msg.get("role") == "assistant" and bool(last_msg.get("tool_calls"))
+
+    def _get_pending_toolcalls(self):
+        """Find tool calls from the last assistant message that don't have tool responses yet.
+
+        This handles the case where an assistant message contains multiple tool_calls
+        but only some were executed before a crash/interrupt.
+        """
+        last_assistant_idx = None
+        for i in range(len(self.chat_history) - 1, -1, -1):
+            msg = self.chat_history[i]
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                last_assistant_idx = i
+                break
+
+        if last_assistant_idx is None:
+            return []
+
+        assistant_msg = self.chat_history[last_assistant_idx]
+        tool_calls = assistant_msg.get("tool_calls", [])
+
+        responded_ids = set()
+        for msg in self.chat_history[last_assistant_idx + 1:]:
+            tcid = msg.get("tool_call_id")
+            if tcid:
+                responded_ids.add(tcid)
+
+        return [tc for tc in tool_calls if tc.get("id") not in responded_ids]
 
 
 
@@ -346,9 +387,11 @@ class Agent:
                 ]
                 vision_msg = {
                     "role": "user",
-                    "content": vision_content
+                    "content": vision_content,
+                    "tool_call_id": toolcall_id,
                 }
                 self.chat_history.append(vision_msg)
+                save_message(self.session_id, vision_msg)
             else:
                 self.chat_history.append(tool_output)
                 save_message(self.session_id, tool_output)
@@ -366,6 +409,15 @@ class Agent:
         last_msg = self.chat_history[-1]
         if last_msg.get("role") == "assistant" and last_msg.get("tool_calls"):
             for toolcall in last_msg["tool_calls"]:
+                function = toolcall.get("function", {})
+                yield from self._execute_tool_call(
+                    toolcall.get("id"),
+                    function.get("name"),
+                    function.get("arguments", "{}"),
+                )
+        elif last_msg.get("tool_call_id"):
+            pending = self._get_pending_toolcalls()
+            for toolcall in pending:
                 function = toolcall.get("function", {})
                 yield from self._execute_tool_call(
                     toolcall.get("id"),
@@ -590,26 +642,30 @@ class Agent:
         """
         BLUE = "\033[34m"
         YELLOW = "\033[33m"
+        DIM = "\033[2m"
         RESET = "\033[0m"
 
-        print(f"{YELLOW}\n[handover] Context window nearly full ({total_tokens}/{context_window} tokens). Generating handover...{RESET}")
+        # Find the last real user message (not the handover prompt we're about to add)
+        last_user_prompt = ""
+        for msg in reversed(self.chat_history):
+            if msg.get("role") == "user" and msg.get("content"):
+                last_user_prompt = msg["content"]
+                break
+
+        print(f"{YELLOW}\n[handover] Context window nearly full ({total_tokens}/{context_window} tokens). Initiating handover...{RESET}")
+        if last_user_prompt:
+            print(f"{DIM}Continuing task: {last_user_prompt}{RESET}")
 
         handover_prompt = (
             "Without using any more tool calls, give me a handover instruction for the next agent session.\n\n"
+            "Focus ONLY on the current task you are working on right now. Do NOT summarize previous tasks that are already completed.\n\n"
+            f"The user's most recent request was:\n\"\"\"\n{last_user_prompt}\n\"\"\"\n\n"
             "Include:\n\n"
-            "1. Original goal\n"
-            "2. Current objective\n"
-            "3. Current state of the code\n"
-            "4. Important files and symbols involved\n"
-            "5. Decisions already made\n"
-            "6. Changes already applied\n"
-            "7. Tests run and their results\n"
-            "8. Errors, blockers, or failed attempts\n"
-            "9. User constraints and preferences\n"
-            "10. Things the next agent must not repeat\n"
-            "11. Exact next step you would take\n"
-            "12. References relevant message, tool call and file paths.\n"
-            "13. Things the next agent must not repeat\n\n"
+            "1. The user's most recent request (copy it verbatim from above)\n"
+            "2. Current state of the code: what you've changed so far for THIS task\n"
+            "3. Important files and symbols involved in THIS task\n"
+            "4. Errors, blockers, or failed attempts on THIS task\n"
+            "5. Exact next step you would take\n\n"
             "Be specific. Do not write vague phrases like \"continue debugging\" without explaining where and how."
         )
 
@@ -618,9 +674,15 @@ class Agent:
 
         model = self.roles[self.agent_role]["model"]
         if self.streaming:
-            yield from self._stream_handover(model)
+            for event in self._stream_handover(model):
+                if event[0] == "error":
+                    yield event
+                    return
         else:
-            yield from self._non_stream_handover(model)
+            for event in self._non_stream_handover(model):
+                if event[0] == "error":
+                    yield event
+                    return
 
         if self._handover_text is None:
             return
@@ -633,17 +695,23 @@ class Agent:
         self.chat_history.append(handover_agent_msg)
         save_message(self.session_id, handover_agent_msg)
 
-        if handover_text:
-            if self.streaming:
-                yield ("response_end", handover_text)
-            else:
-                yield ("response", handover_text)
+        session_info = get_session_info(self.session_id)
+        if session_info is None:
+            session_info = {"parent_session_id": None, "toolcall_id": None, "depth": 0}
 
-        new_session_id = create_session(self.chat_id, parent_session_id=None)
+        new_session_id = create_session(
+            self.chat_id,
+            parent_session_id=session_info.get("parent_session_id"),
+            toolcall_id=session_info.get("toolcall_id"),
+            effort=get_session_effort(self.session_id),
+            depth=session_info.get("depth", 0),
+        )
 
         save_handover(self.session_id, new_session_id, handover_text, total_tokens, context_window)
 
         set_redirect_session_id(self.session_id, new_session_id)
+
+        migrate_todo_lists(self.session_id, new_session_id)
 
         system_msg = {"role": "system", "content": self.system_prompt}
         save_message(new_session_id, system_msg)
@@ -679,7 +747,7 @@ class Agent:
             save_message(self.session_id, user_msg)
             
             # Update chat title with first user message if this is a new session
-            if self.is_new_session:
+            if self.is_new_session and not self.is_subagent:
                 title = generate_title(prompt)
                 update_chat_title(self.chat_id, title)
                 self.is_new_session = False
@@ -704,28 +772,31 @@ class Agent:
             RESET = "\033[0m"
             if not agent_msg.get("tool_calls"):
 
-                # Check if handover is needed before returning
-                if context_window and total_tokens > 0 and (context_window - total_tokens) < HANDOVER_THRESHOLD:
+                # Check if handover is needed before returning (main agent only)
+                if not self.is_subagent and context_window and total_tokens > 0 and (context_window - total_tokens) < HANDOVER_THRESHOLD:
                     yield from self._perform_handover(total_tokens, context_window)
                     continue
 
-                # Commit changes after agent's final response
-                try:
-                    # Build commit message: user message + number of tool calls + agent response
-                    user_message = prompt if prompt else "continuation"
-                    tool_call_count = len([msg for msg in self.chat_history if msg.get("role") == "tool"])
-                    commit_message = f"User: {user_message[:100]}... | Tool calls: {tool_call_count} | Agent response"
-                    
-                    print(f"{BLUE}\ntracking changes...{RESET}")
-                    self.git_manager.add_changed_files()
-                    commit_id = self.git_manager.commit(commit_message)
-                except Exception as commit_err:
-                    # Don't fail the agent if commit fails, just log it
-                    self.console.print(f"[yellow]Warning: Failed to commit changes: {commit_err}[/yellow]")
-                    return
-                
-                print(f"{BLUE}type /undo to undo the last code changes{RESET}")
+                # Commit changes after agent's final response (main agent only — subagents skip this)
+                if not self.is_subagent:
+                    try:
+                        # Build commit message: user message + number of tool calls + agent response
+                        user_message = prompt if prompt else "continuation"
+                        tool_call_count = len([msg for msg in self.chat_history if msg.get("role") == "tool"])
+                        commit_message = f"User: {user_message[:100]}... | Tool calls: {tool_call_count} | Agent response"
+
+                        print(f"{BLUE}\ntracking changes...{RESET}")
+                        self.git_manager.add_changed_files()
+                        commit_id = self.git_manager.commit(commit_message)
+                    except Exception as commit_err:
+                        # Don't fail the agent if commit fails, just log it
+                        self.console.print(f"[yellow]Warning: Failed to commit changes: {commit_err}[/yellow]")
+                        return
+
+                    print(f"{BLUE}type /undo to undo the last code changes{RESET}")
                 return
+
+            history_len_before_tools = len(self.chat_history)
 
             for toolcall in agent_msg["tool_calls"]:
                 yield from self._execute_tool_call(
@@ -734,7 +805,14 @@ class Agent:
                     toolcall["function"]["arguments"],
                 )
 
-            # Check if handover is needed after tool calls, before next API call
-            if context_window and total_tokens > 0 and (context_window - total_tokens) < HANDOVER_THRESHOLD:
-                yield from self._perform_handover(total_tokens, context_window)
+            # Estimate tokens added by tool results to avoid overshooting the context window
+            # on the next API call. total_tokens is from the previous response and doesn't
+            # include tool result messages that were just appended to chat_history.
+            new_msgs = self.chat_history[history_len_before_tools:]
+            tool_result_chars = sum(len(str(msg.get("content", ""))) for msg in new_msgs)
+            estimated_total = total_tokens + tool_result_chars // 4
+
+            # Check if handover is needed after tool calls, before next API call (main agent only)
+            if not self.is_subagent and context_window and estimated_total > 0 and (context_window - estimated_total) < HANDOVER_THRESHOLD:
+                yield from self._perform_handover(estimated_total, context_window)
                 continue

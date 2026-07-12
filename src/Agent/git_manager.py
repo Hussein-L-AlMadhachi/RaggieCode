@@ -194,7 +194,7 @@ class GitManager:
         # A new commit invalidates the redo history
         self._clear_redo_stack()
 
-        return commit.id.decode('utf-8')
+        return bytes(commit.id).decode('utf-8')
     
     def _restore_tree_recursive(self, tree_id, base_path=''):
         """Recursively restore files from a tree, handling nested subtrees.
@@ -224,7 +224,17 @@ class GitManager:
                     f.write(blob.data)
 
     def _delete_working_files(self):
-        """Delete all tracked files from the working directory (respecting exclusions)."""
+        """Delete all tracked files from the working directory (respecting exclusions).
+
+        Uses the same ignore rules as _walk_filesystem() so that gitignored /
+        aiignored files (e.g. .env, *.db) are never deleted during undo/redo.
+        """
+        try:
+            from Tools.utils import is_ignored_by_gitignore
+        except ImportError:
+            def is_ignored_by_gitignore(_path):
+                return False
+
         excluded_dirs, excluded_exts = self._get_exclusions()
         for root, dirs, files in os.walk(self.root_dir, topdown=False, followlinks=False):
             path_components = root.replace(os.sep, '/').split('/')
@@ -235,6 +245,8 @@ class GitManager:
                 if any(file.endswith(ext) for ext in excluded_exts):
                     continue
                 file_path = os.path.join(root, file)
+                if is_ignored_by_gitignore(file_path):
+                    continue
                 try:
                     os.remove(file_path)
                 except (IOError, OSError) as e:
@@ -298,7 +310,7 @@ class GitManager:
             # Get the parent commit
             parent_id = head_commit.parents[0]
             parent_commit = self.repo.object_store[parent_id]
-            parent_commit_sha = parent_id.decode('utf-8')
+            parent_commit_sha = bytes(parent_id).decode('utf-8')
 
             # --- Transaction safety: write marker before making changes ---
             marker_path = os.path.join(self.raggie_dir, ".undoing")
@@ -317,7 +329,7 @@ class GitManager:
 
             # Push the undone commit onto the redo stack
             redo_stack = self._read_redo_stack()
-            redo_stack.append(head_id.decode('utf-8'))
+            redo_stack.append(bytes(head_id).decode('utf-8'))
             self._write_redo_stack(redo_stack)
 
             # --- Transaction safety: remove marker after successful completion ---
@@ -402,7 +414,7 @@ class GitManager:
         """
         try:
             head_id = self.repo.refs[b"refs/heads/main"]
-            return head_id.decode('utf-8')
+            return bytes(head_id).decode('utf-8')
         except KeyError:
             return None
     
@@ -550,7 +562,7 @@ class GitManager:
         try:
             head_id = self.repo.refs[b"refs/heads/main"]
             head_commit = self.repo.object_store[head_id]
-            result['commit_id'] = head_id.decode('utf-8')
+            result['commit_id'] = bytes(head_id).decode('utf-8')
             result['commit_message'] = head_commit.message.decode('utf-8')
         except KeyError:
             result['commit_id'] = None
@@ -701,7 +713,7 @@ class GitManager:
             ts = datetime.fromtimestamp(commit.commit_time, tz=timezone.utc)
             
             commits.append({
-                'commit_id': commit_id.decode('utf-8'),
+                'commit_id': bytes(commit_id).decode('utf-8'),
                 'message': commit.message.decode('utf-8'),
                 'timestamp': ts.isoformat(),
                 'author': commit.author.decode('utf-8'),

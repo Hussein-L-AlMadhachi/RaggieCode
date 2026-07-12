@@ -64,7 +64,7 @@ Every tool call is displayed in real time with its arguments. Debug mode (`--deb
 | **Call graph traversal** | BFS traversal from any entry point with cycle detection (depth 5). Trace execution flow across your entire codebase |
 | **Fuzzy symbol search** | Find functions/classes/variables by name even when you don't know the exact spelling |
 | **Multi-step task planning** | Todo list system with user approval gates, sequential subagent execution, and crash recovery |
-| **Subagent delegation** | Spawn child agents for subtasks (up to 3 levels deep) with optional timeouts |
+| **Subagent delegation** | Spawn child agents for subtasks with depth controlled by effort levels and optional timeouts |
 | **Automatic context handover** | When the context window fills up, the agent generates a handover document and continues in a fresh session |
 | **Skills system** | Persistent, on-demand instruction sets that the agent advertises and fetches as needed |
 | **Built-in git versioning** | Every change committed automatically. `/undo` to undo, `/redo` to redo. Full diff and log introspection |
@@ -75,6 +75,7 @@ Every tool call is displayed in real time with its arguments. Debug mode (`--deb
 | **Any OpenAI-compatible LLM** | Works with OpenAI, DeepSeek, OpenRouter, Ollama, vLLM, LocalAI, and anything else that speaks the OpenAI API |
 | **Persistent chat history** | SQLite-backed sessions, messages, skills, and todo lists. all survive across restarts |
 | **Project customization** | `AGENTS.md` for project conventions, `roles.json` for model/tool configuration, skills for persistent instructions |
+| **Effort levels** | Control how deep the agent can nest subagents. 5 levels: Zen (depth 1), Serious (2), Extreme (4), Feral (8), Insane (16). Change mid-session with `/effort` |
 | **Background shell execution** | Run long-running commands (dev servers, watchers) non-blocking with PID tracking and kill support |
 | **Web search & fetch** | Search the web via DuckDuckGo and fetch URL content. the agent can look up docs and APIs |
 | **Multiprocessing indexing** | Tree-sitter parsing uses multiprocessing for fast indexing of large codebases |
@@ -87,6 +88,7 @@ Every tool call is displayed in real time with its arguments. Debug mode (`--deb
 - [Quick Start](#quick-start)
 - [Commands Reference](#commands-reference)
 - [In-Chat Commands](#in-chat-commands)
+- [Effort Levels](#effort-levels)
 - [Architecture](#architecture)
 - [Configuration](#configuration)
 - [Using Local AI](#using-local-ai)
@@ -182,10 +184,12 @@ Press Esc followed by Enter to send message, or type 'exit' to quit
 --------------------------------------------------
 Indexing codebase...
 
+Effort: Zen - to change it use /effort
+
 You:
 > Add input validation to the login endpoint and update all callers
 
-Agent:
+Agent (deepseek-v4-flash:0):
 I'll start by finding the login endpoint and tracing its callers.
 
   [tool] GetSymbolSourceCode(name="login")
@@ -207,6 +211,38 @@ type /undo to undo the last code changes
 
 ---
 
+## Effort Levels
+
+Effort levels control how deep the agent can nest subagents. Higher effort means the agent can break down complex tasks into more layers of subtasks.
+
+| Level | Name | Max Depth | Description |
+|---|---|---|---|
+| 1 | **Zen** | 1 | Minimal. One level of subagents only. Fast and cheap. Default for new sessions |
+| 2 | **Serious** | 2 | Moderate. Up to 2 levels of nested subagents |
+| 3 | **Extreme** | 4 | Deep. Up to 4 levels of nested subagents for complex multi-step tasks |
+| 4 | **Feral** | 8 | Very deep. Up to 8 levels. For highly complex tasks requiring extensive decomposition |
+| 5 | **Insane** | 16 | Deepest. Up to 16 levels. For the most complex tasks. Use with caution |
+
+### Changing effort
+
+- **In interactive mode**: The current effort level is displayed before each prompt. Use `/effort` to change it:
+  ```
+  /effort 3        # set by number
+  /effort extreme  # set by name (case-insensitive)
+  /effort          # interactive prompt to pick a level
+  ```
+- **In non-interactive mode**: Pass `--effort <num>` on the command line:
+  ```bash
+  raggie code myproject --prompt "Refactor everything" --effort 5
+  ```
+- New sessions default to **Zen** (level 1). The effort level persists per session in the database.
+
+### How depth works
+
+When the agent dispatches a subagent, the child session's depth increments. If the depth reaches the effort level's `max_depth`, further subagent dispatch and todo list creation are blocked. This prevents runaway recursion and keeps costs predictable.
+
+---
+
 ## Commands Reference
 
 ### `raggie <role> <project-dir>`
@@ -218,6 +254,7 @@ Run the AI agent with a specific role in a project directory.
 | `role` | (Required) Agent role, defined in `roles.json`. Default: `"code"` |
 | `project-dir` | (Optional) Path to the project directory. Use `.` for current directory. Created if it doesn't exist. Default: `.` |
 | `--prompt` | (Optional) Single prompt. Omit for interactive mode |
+| `--effort` | (Optional) Effort level 1-5 (zen, serious, extreme, feral, insane). Controls max subagent depth |
 | `--debug` | Show raw tool call outputs for debugging |
 
 **Examples:**
@@ -298,6 +335,8 @@ These commands are available inside the interactive chat loop. They are intercep
 | `/streaming on\|off` | Toggle streaming mode mid-conversation. Persists to `roles.json` |
 | `/reasoning on\|off` | Toggle reasoning output mid-conversation. Persists to `roles.json` |
 | `/windowSize <number>` | Set the context window size (in tokens) for handover logic. Persists to `roles.json` |
+| `/globalTodo on\|off` | Toggle shared todo lists across subagents. Persists to `roles.json` |
+| `/effort <num\|name>` | Set effort level (1-5 or zen, serious, extreme, feral, insane). Controls max subagent depth |
 | `/help` | Show available in-chat commands |
 | `!<command>` | Run a shell command directly (e.g. `!ls -la`, `!pytest tests/`) |
 
@@ -305,6 +344,8 @@ These commands are available inside the interactive chat loop. They are intercep
 - `/streaming`, `/reasoning`, and `/windowSize` take effect on the next message and persist to `~/.config/raggie/roles.json` so they survive across sessions.
 - Calling `/streaming` or `/reasoning` without arguments shows the current status.
 - Calling `/windowSize` without arguments shows the current context window size.
+- Calling `/effort` without arguments prompts you to pick a level interactively.
+- Calling `/globalTodo` without arguments shows the current status.
 - Shell commands run via `!` are executed in the project directory and their output is printed directly. They do not go through the LLM.
 
 ---
@@ -334,7 +375,7 @@ raggie/
 │   │   ├── replace.py         # ReplaceText
 │   │   ├── remove.py          # RemoveFile
 │   │   ├── shell.py           # Shell command execution
-│   │   ├── shell_background.py # ShellBackground. non-blocking shell commands
+│   │   ├── temp_background_service.py # TempBackgroundService. temporary background services
 │   │   ├── shell_kill.py      # ShellKill. kill background processes
 │   │   ├── search.py          # SearchAllFilesContent (grep)
 │   │   ├── list_dir.py        # ListDir
@@ -589,7 +630,7 @@ this part is powered by the code indexer (code analysis and dependency tracking 
 | `ReplaceText` | Find-and-replace in an existing file (literal or regex, supports replace_all) |
 | `RemoveFile` | Delete a file or directory (refuses gitignored paths) |
 | `Shell` | Execute a shell command (for build, test, etc.) |
-| `ShellBackground` | Start a shell command in the background (non-blocking, returns PID) |
+| `TempBackgroundService` | Start a temporary background service (non-blocking, returns PID) |
 | `ShellKill` | Kill a background shell process by PID |
 
 ### Information Gathering

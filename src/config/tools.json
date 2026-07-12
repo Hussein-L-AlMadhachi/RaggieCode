@@ -42,7 +42,7 @@
         "type": "function",
         "function": {
             "name": "Shell",
-            "description": "Execute a shell command via subprocess. Returns stdout on success; on failure returns stderr with the exit code. The command is killed if it exceeds the timeout (default 30 seconds). NEVER use this to write or edit files (use WriteFile/ReplaceText instead). NEVER use this to read files that are in .gitignore. For long-running commands, use ShellBackground instead.",
+            "description": "Execute a shell command via subprocess. Returns stdout on success; on failure returns stderr with the exit code. The command is killed if it exceeds the timeout (default 30 seconds). NEVER use this to write or edit files (use WriteFile/ReplaceText instead). NEVER use this to read files that are in .gitignore. For long-running commands, use TempBackgroundService instead.",
             "parameters": {
                 "type": "object",
                 "required": ["command"],
@@ -59,18 +59,18 @@
             }
         }
     },
-    "ShellBackground": {
+    "TempBackgroundService": {
         "type": "function",
         "function": {
-            "name": "ShellBackground",
-            "description": "Start a shell command in the background (non-blocking). Returns a PID that can be used with ShellKill to terminate the process. Applies the same sandbox and gitignore restrictions as Shell. Requires user confirmation. stdout and stderr are captured to temp files and returned when the process is killed.",
+            "name": "TempBackgroundService",
+            "description": "Start a TEMPORARY background service (non-blocking). Designed for short-lived dev servers, watch processes, or other long-running services that need to stay alive while you do other work. Returns a PID that can be used with ShellKill to terminate the process. Applies the same sandbox and gitignore restrictions as Shell. Requires user confirmation. stdout and stderr are captured to temp files and returned when the process is killed. STRONGLY DISCOURAGED for: (1) normal shell commands whose output you need — use Shell instead, (2) installing dependencies (pip install, npm install, etc.) — use Shell instead, (3) build/test commands — use Shell instead. Only use this when the process MUST keep running in the background while you perform other tasks.",
             "parameters": {
                 "type": "object",
                 "required": ["command"],
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "The shell command to execute in the background (requires user confirmation)"
+                        "description": "The command to start as a temporary background service (requires user confirmation)"
                     }
                 }
             }
@@ -80,14 +80,14 @@
         "type": "function",
         "function": {
             "name": "ShellKill",
-            "description": "Kill a background shell process by its PID. Returns any stdout/stderr captured while the process was running. Use the PID returned by ShellBackground.",
+            "description": "Kill a temporary background service by its PID. Returns any stdout/stderr captured while the process was running. Use the PID returned by TempBackgroundService.",
             "parameters": {
                 "type": "object",
                 "required": ["pid"],
                 "properties": {
                     "pid": {
                         "type": "integer",
-                        "description": "The PID of the background process to kill (returned by ShellBackground)"
+                        "description": "The PID of the background service to kill (returned by TempBackgroundService)"
                     }
                 }
             }
@@ -452,9 +452,9 @@
                         "type": "string",
                         "description": "Background information the subagent needs to accomplish this task. Since each task is executed by a separate isolated subagent with no access to the orchestrator's conversation history, this field is how you pass along knowledge about the codebase, architecture decisions, relevant file paths, API contracts, data structures, or any other details the subagent needs. Be thorough — the subagent cannot ask you questions during execution."
                     },
-                    "order_index": {
+                    "insert_after": {
                         "type": "integer",
-                        "description": "Execution order (0, 1, 2, ...). Tasks are executed in ascending order."
+                        "description": "Insert this task after the given task number (1-based). Use 0 to insert at the beginning. If omitted, the task is appended to the end of the list. Example: insert_after=2 inserts after task 2, making the new task become task 3."
                     }
                 }
             }
@@ -553,14 +553,18 @@
         "type": "function",
         "function": {
             "name": "MarkTaskCancelled",
-            "description": "Manually mark a task as cancelled. Use this if a task is no longer needed or should be skipped. Cancelled tasks are distinct from failed tasks - they were intentionally not executed.",
+            "description": "Manually mark a task as cancelled. Use this if a task is no longer needed or should be skipped. Cancelled tasks are distinct from failed tasks - they were intentionally not executed. A reason is required so the cancellation is documented.",
             "parameters": {
                 "type": "object",
-                "required": ["task_id"],
+                "required": ["task_id", "reason"],
                 "properties": {
                     "task_id": {
                         "type": "integer",
                         "description": "The ID of the task to mark as cancelled"
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "A brief explanation of why this task is being cancelled. This is stored and displayed in the todo list for future reference."
                     }
                 }
             }
@@ -672,6 +676,31 @@
                     "max_diff_lines": {
                         "type": "integer",
                         "description": "For view_type='diff': maximum number of lines per diff. Larger diffs are truncated to show the head and tail, with a truncation marker. Set to 0 for no limit (default: 500)"
+                    }
+                }
+            }
+        }
+    },
+    "EditSymbol": {
+        "type": "function",
+        "function": {
+            "name": "EditSymbol",
+            "description": "Replace the entire implementation of a function, method, or class by name. Provide the COMPLETE new source code — not a diff or patch. Returns a diff view of the changes. Refuses gitignored files. Use GetSymbolSourceCode first if you need to see the current implementation.",
+            "parameters": {
+                "type": "object",
+                "required": ["symbol_name", "new_source"],
+                "properties": {
+                    "symbol_name": {
+                        "type": "string",
+                        "description": "The name of the function, method, or class to edit"
+                    },
+                    "new_source": {
+                        "type": "string",
+                        "description": "The complete new source code for the symbol. This replaces the entire current implementation from start line to end line."
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Optional file path to disambiguate when multiple symbols share the same name"
                     }
                 }
             }

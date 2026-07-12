@@ -1,7 +1,7 @@
 from Agent.tools import ToolRegistry
 
 def setup_toolcalls(registry: ToolRegistry):
-    from . import shell, shell_background, shell_kill, read, write, replace, remove, GetSymbolSourceCode, GetFileCodeStructure, document, walk_call_tree, list_dir, search, fuzzy_search, read_image, dispatch_subagent, todo_list, web_fetch, web_search, view_changes, ask_user
+    from . import shell, temp_background_service, shell_kill, read, write, replace, remove, GetSymbolSourceCode, GetFileCodeStructure, document, walk_call_tree, list_dir, search, fuzzy_search, read_image, dispatch_subagent, todo_list, web_fetch, web_search, view_changes, ask_user, edit_symbol
     from skills.tool import handle as update_skill_handle
     from skills.tool import handle_get_skill as get_skill_handle
 
@@ -11,7 +11,7 @@ def setup_toolcalls(registry: ToolRegistry):
     registry.set_handler("ListDir", list_dir.handle)
     registry.set_handler("WriteFile", write.handle)
     registry.set_handler("Shell", shell.handle)
-    registry.set_handler("ShellBackground", shell_background.handle)
+    registry.set_handler("TempBackgroundService", temp_background_service.handle)
     registry.set_handler("ShellKill", shell_kill.handle)
     registry.set_handler("ReplaceText", replace.handle)
     registry.set_handler("RemoveFile", remove.handle)
@@ -36,3 +36,4 @@ def setup_toolcalls(registry: ToolRegistry):
     registry.set_handler("GetActiveTodoList", todo_list.handle_get_active_todo_list)
     registry.set_handler("AskUser", ask_user.handle)
     registry.set_handler("ViewChanges", view_changes.handle)
+    registry.set_handler("EditSymbol", edit_symbol.handle)

@@ -666,7 +666,7 @@ def main():
             sys.exit(1)
 
         from interactive import run_non_interactive
-        run_non_interactive(agent, args.prompt)
+        run_non_interactive(agent, args.prompt, effort=getattr(args, 'effort', None))
 
 
 if __name__ == "__main__":

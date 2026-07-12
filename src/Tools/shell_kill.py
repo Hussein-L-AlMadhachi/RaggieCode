@@ -1,7 +1,7 @@
 import os
 
 from .utils import BLUE, RED, RESET
-from .shell_background import _background_processes
+from .temp_background_service import _background_processes
 
 
 def handle(arguments, toolcall_id):

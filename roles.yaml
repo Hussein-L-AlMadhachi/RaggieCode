@@ -1,0 +1,87 @@
+code:
+  tools:
+    - UglyWholeFileContentDump
+    - ListDir
+    - Shell
+    - TempBackgroundService
+    - ShellKill
+    - WriteFile
+    - ReplaceText
+    - RemoveFile
+    - GetSymbolSourceCode
+    - GetFileCodeSemantics
+    - WalkCallTree
+    - SetSkill
+    - GetSkill
+    - SearchAllFilesContent
+    - WebFetch
+    - WebSearch
+    - DispatchSubagent
+    - CreateTodoList
+    - AddTask
+    - GetTodoList
+    - ApproveTodoList
+    - ExecuteNextTask
+    - MarkTaskComplete
+    - MarkTaskFailed
+    - MarkTaskCancelled
+    - GetActiveTodoList
+    - ViewChanges
+    - AskUser
+    - FileNameSearch
+    - EditSymbol
+  model: deepseek-v4-flash
+  url: https://api.deepseek.com
+  system_prompt_file: code_system_prompt.md
+  handoverThreshold: 200000
+  reasoning: true
+  streaming: false
+
+define-plan:
+  tools:
+    - UglyWholeFileContentDump
+    - ListDir
+    - GetSymbolSourceCode
+    - GetFileCodeSemantics
+    - WalkCallTree
+    - GetSkill
+    - SearchAllFilesContent
+    - WebFetch
+    - WebSearch
+    - AskUser
+    - FileNameSearch
+  model: deepseek-v4-pro
+  url: https://api.deepseek.com
+  system_prompt_file: define_plan_system_prompt.md
+  handoverThreshold: 200000
+  reasoning: true
+  streaming: false
+
+refine-plan:
+  tools:
+    - UglyWholeFileContentDump
+    - ListDir
+    - GetSymbolSourceCode
+    - GetFileCodeSemantics
+    - WalkCallTree
+    - GetSkill
+    - SearchAllFilesContent
+    - WebFetch
+    - WebSearch
+    - AskUser
+    - FileNameSearch
+  model: deepseek-v4-pro
+  url: https://api.deepseek.com
+  system_prompt_file: refine_plan_prompt.md
+  handoverThreshold: 200000
+  reasoning: true
+  streaming: false
+
+
+$workflow:
+  coding: raggie.workflow
+  roles:
+    - refine-plan
+    - define-plan
+    - code
+

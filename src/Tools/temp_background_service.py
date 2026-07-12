@@ -10,7 +10,7 @@ _background_processes = {}
 
 def handle(arguments, toolcall_id):
     command = arguments["command"]
-    print(f"{BLUE}ShellBackground{RESET}")
+    print(f"{BLUE}TempBackgroundService{RESET}")
 
     # Enforce sandbox: block commands that touch paths outside cwd
     for path in _extract_paths(command):
@@ -43,7 +43,7 @@ def handle(arguments, toolcall_id):
     try:
         confirmation = ""
         try:
-            confirmation = input(f"{BLUE}Execute command (background): {command}\n? (y/n): {RESET}")
+            confirmation = input(f"{BLUE}Start background service: {command}\n? (y/n): {RESET}")
         except KeyboardInterrupt:
             print()
             exit(0)
@@ -53,6 +53,16 @@ def handle(arguments, toolcall_id):
 
         if confirmation.lower() != "y":
             print("Command execution cancelled by user.")
+            try:
+                reason = input(f"{BLUE}Reason for refusal (optional, press Enter to skip): {RESET}").strip()
+            except (KeyboardInterrupt, EOFError):
+                reason = ""
+            if reason:
+                return {
+                    "role": "tool",
+                    "tool_call_id": toolcall_id,
+                    "content": f"The user refused running this command. Reason: {reason}",
+                }
             return {
                 "role": "tool",
                 "tool_call_id": toolcall_id,

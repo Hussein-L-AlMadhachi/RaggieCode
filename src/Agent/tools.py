@@ -29,7 +29,7 @@ class ToolRegistry:
             return tool(arguments, toolcall_id, self.agent_role, parent_session_id, **kwargs)
         if has_agent_role:
             return tool(arguments, toolcall_id, self.agent_role, **kwargs)
-        if has_parent_session_id or len(params) >= 3:
+        if has_parent_session_id or "session_id" in params:
             return tool(arguments, toolcall_id, parent_session_id, **kwargs)
 
         return tool(arguments, toolcall_id, **kwargs)

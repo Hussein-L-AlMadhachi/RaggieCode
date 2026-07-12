@@ -1,4 +1,4 @@
-from .utils import is_ignored_by_gitignore, is_within_cwd, BLUE, RESET, auto_record_change, reindex_after_change
+from .utils import is_ignored_by_gitignore, is_within_cwd, BLUE, RESET, auto_record_change, reindex_after_change, remove_em_dashes
 
 
 def handle(arguments, toolcall_id, session_id=None, code_indexer=None):
@@ -22,6 +22,8 @@ def handle(arguments, toolcall_id, session_id=None, code_indexer=None):
                 "tool_call_id": toolcall_id,
                 "content": f"Error: File '{file_path}' is in .gitignore. Operations on gitignored files are not allowed.",
             }
+
+        content = remove_em_dashes(content)
 
         with open(file_path, "w") as f:
             f.write(content)

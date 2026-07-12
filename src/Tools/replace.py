@@ -1,12 +1,14 @@
 import os
 import re
-from .utils import is_ignored_by_gitignore, is_within_cwd, BLUE, RESET, auto_record_change, reindex_after_change
+from .utils import is_ignored_by_gitignore, is_within_cwd, BLUE, RESET, auto_record_change, reindex_after_change, remove_em_dashes
 
 
 def handle(arguments, toolcall_id, session_id=None, code_indexer=None):
     file_path = arguments.get("file_path")
     old_string = arguments.get("old_string")
     new_string = arguments.get("new_string")
+    if new_string:
+        new_string = remove_em_dashes(new_string)
     replace_all = arguments.get("replace_all", False)
     use_regex = arguments.get("use_regex", False)  # Explicit mode flag
 
@@ -119,63 +121,59 @@ def handle(arguments, toolcall_id, session_id=None, code_indexer=None):
                 ),
             }
 
-        # Build diff view: show old vs new with 5 lines context
-        CONTEXT = 5
-        original_lines = content.split("\n")
-        diff_blocks = []
-
         # Apply replacements in reverse order so string index spans stay valid
         new_content = content
         for start, end, _, replacement in reversed(match_data):
             new_content = new_content[:start] + replacement + new_content[end:]
 
-        # Build per-match diffs
+        # Build result view: show new file content with 6 lines context around each change
+        CONTEXT = 6
+        new_lines_all = new_content.split("\n")
+        result_blocks = []
+        line_offset = 0
+
         for start, end, matched_text, replacement in match_data:
             start_line = content[:start].count("\n")
             matched_line_count = matched_text.count("\n") + 1
             replacement_line_count = replacement.count("\n") + 1
-            end_line = start_line + matched_line_count
 
-            ctx_start = max(0, start_line - CONTEXT)
-            ctx_after = min(len(original_lines), end_line + CONTEXT)
+            new_start = start_line + line_offset
+            new_end = new_start + replacement_line_count
 
-            old_lines = matched_text.split("\n")
-            new_lines = replacement.split("\n")
+            ctx_start = max(0, new_start - CONTEXT)
+            ctx_after = min(len(new_lines_all), new_end + CONTEXT)
 
             block = [
-                f"@@ {file_path}:{start_line+1} ({matched_line_count} lines "
-                f"→ {replacement_line_count} lines) @@",
+                f"@@ {file_path}:{new_start+1}-{new_end} @@",
             ]
 
-            for i in range(ctx_start, start_line):
-                block.append(f"    {original_lines[i]}")
+            for i in range(ctx_start, new_start):
+                block.append(f"    {new_lines_all[i]}")
 
-            for line in old_lines:
-                block.append(f"  - {line}")
+            for i in range(new_start, new_end):
+                block.append(f"  > {new_lines_all[i]}")
 
-            for line in new_lines:
-                block.append(f"  + {line}")
+            for i in range(new_end, ctx_after):
+                block.append(f"    {new_lines_all[i]}")
 
-            for i in range(end_line, ctx_after):
-                block.append(f"    {original_lines[i]}")
-
-            diff_blocks.append("\n".join(block))
+            result_blocks.append("\n".join(block))
+            line_offset += replacement_line_count - matched_line_count
 
         with open(file_path, "w") as f:
             f.write(new_content)
 
         mode = "regex" if use_regex else "literal"
         replaced = count if replace_all else 1
-        diff_text = "\n\n".join(diff_blocks)
+        result_text = "\n\n".join(result_blocks)
 
         if session_id is not None:
             from Agent.chat_history_db import record_session_file
             record_session_file(session_id, file_path, "replace")
-            auto_record_change(session_id, file_path, "file_edit", f"Edited {file_path}: replaced {replaced} occurrence(s)", diff_text)
+            auto_record_change(session_id, file_path, "file_edit", f"Edited {file_path}: replaced {replaced} occurrence(s)", result_text)
 
         summary = (
             f"Replaced {replaced} occurrence(s) in {file_path} ({mode} match):\n\n"
-            f"{diff_text}"
+            f"{result_text}"
         )
         reindex_after_change(code_indexer)
 

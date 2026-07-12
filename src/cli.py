@@ -33,6 +33,7 @@ examples:
     parser.add_argument("role", nargs="?", help="The agent role to use (defined in roles.json)")
     parser.add_argument("project_dir", nargs="?", default=".", help="Path to the project directory (use '.' for current directory)")
     parser.add_argument("--prompt", help="The initial prompt for the agent (if not provided, runs in interactive mode)")
+    parser.add_argument("--effort", type=int, choices=[1, 2, 3, 4, 5], help="Effort level: 1=Zen, 2=Serious, 3=Extreme, 4=Feral, 5=Insane (default: 1=Zen)")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode to display tool call outputs")
     return parser
 
