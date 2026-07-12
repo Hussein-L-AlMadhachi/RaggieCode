@@ -25,7 +25,7 @@ def _prompt_effort(session_id, value=None):
     default_num = current if current is not None else DEFAULT_EFFORT
 
     for num, info in EFFORT_LEVELS.items():
-        marker = " (default)" if num == default_num else ""
+        marker = " (selected)" if num == default_num else ""
         print(f"  {num}. {info['name']}{marker}")
 
     while True:
