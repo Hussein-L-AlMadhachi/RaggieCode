@@ -93,6 +93,20 @@ try:
 except ImportError:
     kotlin_language = None
 
+try:
+    from tree_sitter_language_pack import get_language as html_language_pack
+
+    html_language = html_language_pack("html")
+except ImportError:
+    html_language = None
+
+try:
+    from tree_sitter_language_pack import get_language as css_language_pack
+
+    css_language = css_language_pack("css")
+except ImportError:
+    css_language = None
+
 
 LANGUAGE_CONFIG = {
     "python": {
@@ -282,6 +296,28 @@ LANGUAGE_CONFIG = {
             "class": ["class_declaration", "object_declaration"],
             "assignment": ["assignment"],
             "type_alias": ["type_alias"],
+        },
+    },
+    "html": {
+        "extensions": [".html", ".htm"],
+        "language_module": html_language,
+        "node_types": {
+            "element": ["element", "void_element"],
+            "text": ["text"],
+            "script_element": ["script_element"],
+            "style_element": ["style_element"],
+        },
+    },
+    "css": {
+        "extensions": [".css"],
+        "language_module": css_language,
+        "node_types": {
+            "rule_set": ["rule_set"],
+            "selectors": ["selectors"],
+            "block": ["block"],
+            "declaration": ["declaration"],
+            "import_statement": ["import_statement"],
+            "keyframes_statement": ["keyframes_statement"],
         },
     },
 }

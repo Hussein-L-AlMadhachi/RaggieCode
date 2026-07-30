@@ -1,6 +1,6 @@
 # Raggie Code 
 
-> *Raggie Code v0.1.3 (beta)*
+> *Raggie Code v0.2.1 (beta)*
 
 <p style="padding:30px 50px;">
   <img src="Raggie.png" alt="Raggie" width="312">
@@ -106,7 +106,7 @@ Every tool call is displayed in real time with its arguments. Debug mode (`--deb
 ### From pip (GitHub)
 
 ```bash
-pip install git+https://github.com/Hussein-L-AlMadhachi/RaggieCode.git
+pip install raggiecode
 ```
 
 ### From source
@@ -337,6 +337,7 @@ These commands are available inside the interactive chat loop. They are intercep
 | `/windowSize <number>` | Set the context window size (in tokens) for handover logic. Persists to `roles.json` |
 | `/globalTodo on\|off` | Toggle shared todo lists across subagents. Persists to `roles.json` |
 | `/effort <num\|name>` | Set effort level (1-5 or zen, serious, extreme, feral, insane). Controls max subagent depth |
+| `/reindex [--force]` | Re-index the codebase. Use `--force` to re-index all files from scratch |
 | `/help` | Show available in-chat commands |
 | `!<command>` | Run a shell command directly (e.g. `!ls -la`, `!pytest tests/`) |
 
@@ -370,7 +371,7 @@ raggie/
 │   │   └── git_manager.py     # Local git repo in .raggie/git/ for versioning
 │   ├── Tools/
 │   │   ├── __init__.py        # Registers all tool handlers with the registry
-│   │   ├── read.py            # UglyWholeFileContentDump
+│   │   ├── read.py            # WholeFileContentDump
 │   │   ├── write.py           # WriteFile
 │   │   ├── replace.py         # ReplaceText
 │   │   ├── remove.py          # RemoveFile
@@ -419,7 +420,7 @@ raggie/
 
 ### How the Agent Works
 
-1. **Startup**: The agent loads its role config, connects to the LLM API, indexes your codebase (tree-sitter, multiprocessing), and initialises its local git repo.
+1. **Startup**: The agent loads its role config, connects to the LLM API, checks for project markers in the working directory, indexes your codebase (tree-sitter, multiprocessing) if it looks like a project, and initialises its local git repo.
 2. **Prompt loop**: User sends a message → agent calls the LLM with full chat history + tool definitions → LLM responds with text and/or tool calls.
 3. **Tool execution**: Each tool call is dispatched to a registered handler. Results are fed back to the LLM as tool responses.
 4. **Re-indexing**: After each tool call, the code index is updated so the agent always has fresh context.
@@ -449,7 +450,7 @@ Defines agent roles. Each role has a model, base URL, tools list, and system pro
 ```json
 {
   "code": {
-    "tools": ["UglyWholeFileContentDump", "Shell", "WriteFile", ...],
+    "tools": ["WholeFileContentDump", "Shell", "WriteFile", ...],
     "model": "deepseek-v4-flash",
     "base_url": "https://api.deepseek.com",
     "system_prompt_file": "coder_system_prompt.md"
@@ -617,7 +618,7 @@ this part is powered by the code indexer (code analysis and dependency tracking 
 | `GetFileCodeSemantics` | Show a file's structure: functions, classes, imports, dependencies, with optional full source bodies |
 | `GetSymbolSourceCode` | Get full source of a function/class/variable by name with fuzzy search fallback |
 | `WalkCallTree` | BFS traversal of the call graph from any entry point (up to depth 5, cycle detection) |
-| `UglyWholeFileContentDump` | Read raw file contents (throttled. prefer semantic tools first) |
+| `WholeFileContentDump` | Read raw file contents (throttled. prefer semantic tools first) |
 | `ListDir` | List directory contents with type and size |
 | `SearchAllFilesContent` | Regex grep across files/directories |
 | `FileNameSearch` | Fuzzy search for file names by partial or approximate match (top 5 results) |
@@ -775,6 +776,16 @@ The code indexer supports 15 programming languages via tree-sitter grammars:
 
 Languages are gracefully skipped if their tree-sitter grammar is not installed.
 
+### Project directory detection
+
+Before indexing, Raggie checks whether the current directory looks like a code project by looking for project marker files (`.git`, `pyproject.toml`, `package.json`, `go.mod`, `Cargo.toml`, `Makefile`, `pom.xml`, `build.gradle`, `composer.json`, `Gemfile`, `mix.exs`, `build.zig`, `pubspec.yaml`, `.raggie`, `.vscode`, `.idea`, `.editorconfig`, and many more).
+
+- **If project markers are found**: indexing proceeds automatically as normal.
+- **If no project markers are found**: Raggie warns that the directory doesn't look like a project and asks whether to index anyway. This prevents accidentally scanning unrelated files (e.g. if you run `raggie code .` in your home directory). If you decline, Raggie exits and suggests you `cd` into your project directory or start a new one with `raggie code <project-name>`.
+- **Subagent sessions**: indexing is skipped silently (subagents can't prompt interactively).
+
+You can manually trigger re-indexing at any time with the `/reindex` command.
+
 ### Data location
 
 The index is stored in `.raggie/.code_index.raggie` (SQLite).
@@ -784,6 +795,26 @@ The index is stored in `.raggie/.code_index.raggie` (SQLite).
 The code indexer and agent file tools respect a `.aiignore` file in the project root. If present, it is used **instead of** `.gitignore` to determine which files are off-limits — for both indexing and file read/write/modify enforcement. If no `.aiignore` exists, `.gitignore` is used as a fallback.
 
 This lets you control what the agent sees and touches independently of your git configuration. `.aiignore` uses the same pattern syntax as `.gitignore`.
+
+### Indexing Performance
+
+The indexer uses multiprocessing (tree-sitter parsing in parallel workers) with a sliding-window scheduler and a dedicated writer thread to keep both CPU and I/O saturated. Batch `executemany` inserts and a post-indexing dependency resolution pass minimize SQLite round-trips.
+
+**Benchmark: Linux Kernel 7.1.1** (27844648 lines of code across 62,875 files)
+
+| Phase | Time |
+|---|---|
+| File collection | ~4s |
+| Changed-file detection | ~1.5s |
+| Parse + insert (parallel) | ~521s |
+| Dependency resolution | ~66s |
+| **Total** | **~10m37s** |
+
+Symbols indexed: 750K functions, 5.9M macros, 367K classes, 909K structs, 84K enums, 266K variables.
+
+**Benchmark: Typical project** (a few hundred files)
+
+Indexing completes in seconds. Re-indexing after a tool call is incremental — only changed files are re-parsed.
 
 ---
 

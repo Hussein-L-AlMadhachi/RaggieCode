@@ -27,6 +27,7 @@ A tree-sitter–based source code indexer that parses files across 15 programmin
 - [Language-Specific Handling](#language-specific-handling)
 - [Known Limitations and Edge Cases](#known-limitations-and-edge-cases)
 - [Usage Guide](#usage-guide)
+  - [Project Directory Detection](#project-directory-detection)
   - [CLI Usage](#cli-usage)
   - [SDK Usage](#sdk-usage)
 - [Testing](#testing)
@@ -95,7 +96,7 @@ A tree-sitter–based source code indexer that parses files across 15 programmin
 | Rust        | `.rs`                               | `tree_sitter_rust`                   |
 | Zig         | `.zig`                              | `tree_sitter_zig`                    |
 | Elixir      | `.ex`, `.exs`                       | `tree_sitter_elixir`                 |
-| C++         | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.h`, `.hxx` | `tree_sitter_cpp`           |
+| C++         | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.h`, `.hxx` | `tree_sitter_cpp`            |
 | C           | `.c`, `.h`                          | `tree_sitter_c`                      |
 | PHP         | `.php`                              | `tree_sitter_php`                    |
 | Dart        | `.dart`                             | `tree_sitter_language_pack("dart")`  |
@@ -139,7 +140,7 @@ File system utilities for the indexer:
 
 - **`detect_language(file_path)`** — maps file extension to language name
 - **`load_ignore_patterns(root_dir)`** — loads `.aiignore` (priority) or `.gitignore` patterns using `pathspec`
-- **`collect_files_to_index(root_dir, languages)`** — walks the directory tree, filters by extension and ignore patterns, skips `test`/`tests` directories
+- **`collect_files_to_index(root_dir, languages, exclude_dirs=None)`** — walks the directory tree, filters by extension and ignore patterns, skips `test`/`tests` directories. Also excludes directories from frontend config `generated_dir_exclusions` (e.g. `node_modules`, `dist`, `build`, `.next`). Additional directory names can be passed via `exclude_dirs`.
 - **`read_file_content(file_path)`** — reads file in binary mode for tree-sitter
 - **`get_relative_path(file_path, root_dir)`** — returns relative path string
 
@@ -149,7 +150,7 @@ The parallel parsing worker. Runs in separate processes via `ProcessPoolExecutor
 
 **Key functions:**
 
-- **`parse_file(args)`** — entry point. Takes `(file_path, root_dir)` tuple, returns a dict with all extracted symbols or `{'error': ...}`.
+- **`parse_file(args)`** — entry point. Takes `(file_path, root_dir)` or `(file_path, root_dir, frontend_enabled)` tuple, returns a dict with all extracted symbols or `{'error': ...}`.
 - **`_extract_symbols(...)`** — iteratively walks the tree-sitter AST using an explicit stack (avoids recursion limits on deeply nested files like Linux kernel C). Matches node types against `LANGUAGE_CONFIG` and dispatches to extractor functions.
 - **`_process_class_body(...)`** — processes class body children to extract methods, nested classes, and attributes.
 - **`_extract_deps(node, source_code, language, dependencies, func_index)`** — extracts function calls, class references, and variable references from a function node, attaching them to the function at `func_index`.
@@ -188,6 +189,9 @@ The largest module (~1100 lines). Contains all tree-sitter node inspection utili
 - `extract_docstring(node, source_code, language)` — extracts docstrings (Python, Go, JavaScript, Rust)
 - `is_method(node, language, class_node_type)` — determines if a function is a method
 - `count_branches(node, language, source_code)` — counts conditional branches (if/for/while/switch/try etc.) with language-specific node type mappings
+- `extract_go_receiver(node, source_code)` — extracts Go method receiver type
+- `extract_go_type_name(node, source_code)` — extracts type name from Go `type_declaration` nodes
+- `extract_go_type_kind(node, source_code)` — determines if a Go `type_declaration` is a struct or interface
 
 **Import extraction:**
 - `extract_imports(node, source_code, language, root_dir)` — iteratively finds import nodes. Language-specific import node types:
@@ -251,18 +255,24 @@ Functions that combine multiple `node_utils` calls to produce structured symbol 
 
 The `CodeIndexer` class orchestrates the full indexing process:
 
-- **`__init__(root_dir, languages, db_path, force_reindex, verbose)`** — initializes database, parsers, and statistics
+- **`__init__(root_dir, languages=None, db_path=".code_index.raggie", force_reindex=False, verbose=False, frontend_enabled=True)`** — initializes database, parsers, and statistics. When `frontend_enabled=False`, HTML/CSS/TSX languages are filtered out.
 - **`index_directory()`** — main entry point:
-  1. Collects files to index
+  1. Collects files to index (respecting `.aiignore`/`.gitignore` and frontend config exclusions)
   2. Identifies changed files (mtime check → content hash check)
-  3. Dispatches changed files to `ProcessPoolExecutor` workers
-  4. Inserts parsed results into SQLite in batches (`batch_size = 2000`)
-  5. Flushes remaining batches and cleans up unresolved temp_symbols
-  6. Prints summary statistics if verbose
+  3. Cascade: finds files that depend on changed files via frontend dependency edges and re-indexes them too
+  4. Removes deleted files from the database
+  5. Parses changed files in parallel using a **sliding window** over `ProcessPoolExecutor` (max 16 workers, window size = `max_workers × 4`)
+  6. A **dedicated writer thread** consumes parsed results from a bounded queue and inserts into SQLite (backpressure-aware)
+  7. Post-indexing dependency resolution pass (bulk JOIN/UPDATE instead of per-file queries)
+  8. Frontend cross-file resolution pass (`FrontendResolver.resolve_all()` — render relationships, style imports, custom properties, event handlers, selector matches)
+  9. Cleans up unresolved temp_symbols and temp_file_references
+  10. Prints summary statistics if verbose
 
 **Incremental reindexing:** Files are only re-parsed if both their mtime and content hash (xxhash64) have changed. The mtime check is a fast path; the content hash check handles cases where mtime changed but content didn't (e.g., `touch`).
 
-**Batch insertion:** Uses `executemany()` for bulk inserts to minimize SQLite overhead. Batches are flushed when they reach `batch_size` or at the end of indexing.
+**Batch insertion:** Uses `executemany()` for bulk inserts to minimize SQLite overhead. Batches are flushed when they reach `batch_size` (50000) or at the end of indexing.
+
+**Sliding window parallelism:** Instead of submitting all files at once, the indexer maintains a sliding window of `max_workers × 4` in-flight futures. A dedicated writer thread pulls results from a bounded queue (`maxsize = window_size × 2`) and handles DB inserts, providing backpressure. This eliminates idle time between parse and insert phases. Workers are capped at `min(cpu_count, file_count, 16)`.
 
 ### `code_index_sdk.py`
 
@@ -277,6 +287,19 @@ class CodeIndexSDK(QueryMixin, DescriptionMixin):
 ```
 
 Inherits all query methods from `QueryMixin` and all description-update methods from `DescriptionMixin`.
+
+**Convenience methods (defined on `CodeIndexSDK` directly):**
+
+| Method | Description |
+|--------|-------------|
+| `get_file_summary(file_id)` | Returns dict with file info, functions, classes, variables, type_aliases, structs, interfaces |
+| `get_class_summary(class_id)` | Returns dict with class info, methods, variables, nested_classes |
+| `search_all(pattern)` | Searches functions, classes, variables, and type_aliases by name pattern |
+| `search_symbols(query, limit=10)` | Searches across functions, classes, and variables by name and description. Results ranked: exact name → partial name → description match |
+| `get_dependency_graph(file_path)` | Returns a YAML-like formatted dependency graph string for a file |
+| `get_function_body(function_name, file_path=None)` | Reads the source code of a function/method by name from disk. Prefers class implementations over interface declarations |
+| `get_class_body(class_name, file_path=None)` | Reads the source code of a class by name from disk |
+| `walk_call_tree(symbol_name, file_path=None, max_depth=5, include_external=False, exclude=None)` | Walks the call tree from a function/method, depth-limited with cycle detection. Returns JSON lines (one JSON object per line). Supports `ClassName.method` syntax and class-name walks (returns all methods) |
 
 ### `queries.py`
 
@@ -299,14 +322,22 @@ Contains `QueryMixin` (read queries) and `DescriptionMixin` (description updates
 | Interfaces  | `get_interfaces(file_id?)`, `get_interface_by_id(id)`, `get_interface_by_name(name, file_id?)` |
 | Dependencies| `get_dependencies(file_id?)`, `get_file_imports(file_id)`, `get_external_imports(file_id?)`, `get_internal_imports(file_id?)`, `get_function_calls(func_id)`, `get_function_dependencies(func_id, type?)`, `get_function_method_calls(func_id)`, `get_function_class_references(func_id)`, `get_function_variable_references(func_id)`, `get_function_dependencies_by_name(name, file_id?, type?)`, `get_function_dependencies_grouped(func_id)`, `get_file_function_calls(file_id)` |
 | Statistics  | `get_statistics()`, `get_language_statistics()` |
+| Frontend    | `lookup_frontend_entity(file_path, line, column, include_backend=False)`, `traverse_render_graph(component_id, direction, max_depth)`, `traverse_markup_tree(element_id, direction, max_depth)`, `traverse_style_graph(selector_id, direction, max_depth)`, `traverse_event_graph(element_id)`, `traverse_binding_graph(element_id)`, `traverse_component_to_code(component_id, max_depth)`, `traverse_full_frontend(component_id, max_depth)`, `resolve_runtime_element(metadata)`, `get_frontend_diagnostics(file_id)`, `get_diagnostics_by_severity(severity)` |
 
 **DescriptionMixin methods:**
 - `set_function_description(id, desc)`, `set_function_description_by_name(name, desc, file_path?)`
-- `set_method_description(id, desc)`, `set_class_description(id, desc)`, `set_class_description_by_name(...)`
-- `set_variable_description(id, desc)`, `set_variable_description_by_name(...)`
-- `set_type_alias_description(id, desc)`, `set_type_alias_description_by_name(...)`
-- `set_struct_description(id, desc)`, `set_struct_description_by_name(...)`
-- (and similar for interfaces, enums, namespaces)
+- `set_method_description(id, desc)`
+- `set_class_description(id, desc)`, `set_class_description_by_name(name, desc, file_path?)`
+- `set_variable_description(id, desc)`, `set_variable_description_by_name(name, desc, file_path?)`
+- `set_type_alias_description(id, desc)`, `set_type_alias_description_by_name(name, desc, file_path?)`
+- `set_struct_description(id, desc)`, `set_struct_description_by_name(name, desc, file_path?)`
+- `set_interface_description(id, desc)`, `set_interface_description_by_name(name, desc, file_path?)`
+- `set_enum_description(id, desc)`, `set_enum_description_by_name(name, desc, file_path?)`
+- `set_symbol_description(symbol_type, symbol_id, desc)` — generic dispatch by type (`function`, `method`, `class`, `variable`, `type_alias`, `struct`, `interface`, `enum`)
+- `get_symbol_description(symbol_type, symbol_id)` — generic get by type and ID
+- `get_symbol_description_by_name(symbol_type, name, file_path?)` — generic get by type and name
+- `search_descriptions(query, symbol_types?, limit)` — search symbols by description content (SQL LIKE)
+- `get_undocumented_symbols(symbol_types?, file_id?)` — find symbols with no description
 
 ### `models.py`
 
@@ -337,9 +368,12 @@ Command-line argument parsing:
 - `-l/--languages` — comma-separated language filter
 - `-o/--output` — output database path (default: `code_index.db`)
 - `--list-languages` — print supported languages and exit
+- `--list-frontend-languages` — print supported frontend languages and exit
+- `--frontend` / `--no-frontend` — enable/disable frontend indexing (default: enabled)
 - `--export-json` — export database to JSON
 - `--force` — force reindex all files
 - `--graph` — view dependency graph for a file
+- `-v/--verbose` — print detailed timing and progress information
 
 ### `export_to_json.py`
 
@@ -421,6 +455,18 @@ Each has: `id`, `file_id`, `name`, `location` (JSON), `description`. Type aliase
 
 ### `temp_symbols`
 Temporary table for unresolved dependency references. During indexing, function calls and class references that don't match any defined symbol are stored here. After all files are indexed, remaining temp_symbols (unresolved references to external/builtin symbols) are cleaned up along with their dependencies.
+
+### `temp_file_references`
+Temporary table for unresolved file-path references (e.g. `@import`, `<script src>`, `<link href>`, CSS module imports). During indexing, references to files that haven't been indexed yet are stored here with their normalized resolved path. After all files are processed, resolved references are updated and remaining unresolved ones (external URLs or missing files) are cleaned up.
+
+| Column             | Type    | Description                                      |
+|-------------------|---------|--------------------------------------------------|
+| `id`              | INTEGER | Primary key                                      |
+| `resolved_path`   | TEXT    | Normalized relative path (e.g. `src/components/Button.tsx`) |
+| `reference_type`  | TEXT    | `style_import`, `script_import`, `component_import`, `css_module_import` |
+| `source_file_id`  | INTEGER | FK to files (file making the reference)          |
+| `target_table`    | TEXT    | Which table row to update when resolved          |
+| `target_row_id`   | INTEGER | Row ID in the target table                       |
 
 ---
 
@@ -599,14 +645,49 @@ The indexer checks for `.aiignore` first, falling back to `.gitignore` if `.aiig
 The indexer uses xxhash64 for content hashing, which is fast but not cryptographically secure. This is acceptable for change detection but should not be relied upon for integrity verification.
 
 ### Parallel Processing
-File parsing runs in a `ProcessPoolExecutor` with `min(cpu_count, file_count)` workers. Parsers are cached per-worker process via a global `_parsers` dict. Batch size for in-flight futures is `max_workers * 256` to bound memory usage on large codebases.
+File parsing runs in a `ProcessPoolExecutor` with `min(cpu_count, file_count, 16)` workers. Parsers are cached per-worker process via a global `_parsers` dict. A sliding window of `max_workers × 4` in-flight futures keeps workers fed, while a dedicated writer thread consumes results from a bounded queue (`maxsize = window_size × 2`) and handles DB inserts. This provides backpressure and eliminates idle time between parse and insert phases.
 
 ### Unresolved Dependencies
 Function calls and class references that don't match any defined symbol in the codebase are stored as `temp_symbols` during indexing. After all files are processed, these are cleaned up — their dependencies are deleted from the `dependencies` table. This means external function calls (e.g., `print()` in Python, `fmt.Println()` in Go) are not retained in the final database.
 
+Similarly, unresolved file-path references (external URLs or missing files) are stored in `temp_file_references` and cleaned up after indexing.
+
 ---
 
 ## Usage Guide
+
+### Project Directory Detection
+
+Before indexing, the agent checks whether the current working directory looks like a code project by scanning for **project marker files**. This prevents accidentally indexing unrelated directories (e.g. a user's home directory) which could take a very long time and produce a useless index.
+
+**Markers checked** (any one is sufficient):
+
+| Category | Markers |
+|----------|---------|
+| VCS | `.git`, `.hg`, `.svn` |
+| Python | `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements.txt`, `Pipfile`, `poetry.lock`, `uv.lock`, `tox.ini`, `MANIFEST.in` |
+| JavaScript/TypeScript | `package.json`, `tsconfig.json`, `yarn.lock`, `pnpm-lock.yaml`, `package-lock.json`, `bower.json`, `.npmrc`, `deno.json` |
+| Go | `go.mod`, `go.sum`, `go.work` |
+| Rust | `Cargo.toml` |
+| C/C++ | `CMakeLists.txt`, `Makefile`, `Makefile.am`, `configure.ac`, `meson.build`, `BUCK`, `BUILD`, `BUILD.bazel`, `WORKSPACE` |
+| C#/.NET | `Directory.Build.props`, `global.json`, `*.csproj`, `*.sln` (glob-matched) |
+| Java/Kotlin | `pom.xml`, `build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts`, `gradle.properties` |
+| PHP | `composer.json`, `artisan` |
+| Ruby | `Gemfile`, `Rakefile`, `.rspec` |
+| Elixir | `mix.exs` |
+| Zig | `build.zig` |
+| Dart/Flutter | `pubspec.yaml` |
+| Lua | `rockspec` |
+| Generic/editor | `.raggie`, `.vscode`, `.idea`, `.editorconfig` |
+
+**Behavior:**
+
+- **Markers found** → indexing proceeds automatically.
+- **No markers found (interactive session)** → a warning is displayed and the user is prompted: `Index anyway? (y/N)`. Declining exits the agent with a suggestion to `cd` into a project directory or start a new one with `raggie code <project-name>`.
+- **No markers found (subagent session)** → indexing is skipped (subagents cannot prompt interactively).
+- **Manual re-indexing** → use the `/reindex` in-chat command at any time. Supports `/reindex --force` to re-index all files from scratch.
+
+This check is implemented in `Agent.__init__()` in `src/Agent/agent.py`, before the call to `CodeIndexSDK.index_directory()`.
 
 ### CLI Usage
 
@@ -690,12 +771,168 @@ Tests are located in `tests/indexing/` and cover:
 - **`test_go.py`** — Go-specific extraction (functions, structs, interfaces, type aliases, imports, methods, branches)
 - **`test_rust.py`** — Rust-specific extraction (functions, structs, enums, imports)
 - **`test_c_family.py`** — C and C++ extraction (functions, classes, enums, imports)
+- **`test_csharp.py`** — C#-specific extraction
 - **`test_web_languages.py`** — JavaScript and TypeScript extraction
 - **`test_jvm_languages.py`** — Java and Kotlin extraction
+- **`test_php.py`** — PHP extraction
+- **`test_dart.py`** — Dart extraction
+- **`test_elixir.py`** — Elixir extraction
 - **`test_pipeline.py`** — full indexing pipeline and incremental reindexing
+- **`test_edge_cases.py`** — edge case handling
 - **`test_real_projects.py`** — integration tests against real open-source projects cloned per language
+- **`test_real_world_repos.py`** — integration tests against real-world repositories
+- **`test_sdk_queries.py`** — SDK query method tests
+- **`test_html_indexing.py`** — HTML semantic extraction
+- **`test_css_indexing.py`** — CSS semantic extraction
+- **`test_jsx_indexing.py`** — JSX/TSX semantic extraction
+- **`test_frontend_*.py`** — frontend indexing, graph traversal, cross-file resolution, invalidation, diagnostics, location lookup, runtime resolution, performance, and more (20+ test files)
 
 Run tests:
 ```bash
 python -m pytest tests/ -v --tb=short
 ```
+
+---
+
+## Frontend Indexing
+
+The indexer supports semantic extraction for HTML, CSS, JSX/TSX, and JavaScript files. Frontend indexing is **enabled by default** and can be controlled via the `--frontend` / `--no-frontend` CLI flags.
+
+### Frontend Languages
+
+| Language | Extensions | Description |
+|----------|-----------|-------------|
+| HTML | `.html`, `.htm` | Markup elements, inline styles, events, bindings, style imports |
+| CSS | `.css` | Selectors, custom properties, keyframes, imports, selector↔element matching |
+| TSX | `.tsx` | React components, JSX markup, render relationships, events, bindings |
+| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` | JSX extraction (when JSX syntax is present) |
+
+List frontend languages:
+```bash
+python -m src.indexing.code_indexer --list-frontend-languages
+```
+
+### Frontend Database Tables
+
+| Table | Description |
+|-------|-------------|
+| `frontend_components` | React/JSX component definitions |
+| `markup_elements` | HTML/JSX elements with tag, classes, ID, parent relationships |
+| `style_selectors` | CSS selectors (class, id, element, attribute, etc.) |
+| `style_custom_properties` | CSS custom property definitions (`--var: value`) |
+| `style_custom_property_usages` | `var(--var)` usage sites, resolved to definitions |
+| `style_keyframes` | `@keyframes` definitions |
+| `style_imports` | `@import` and `<link>` references, resolved to files |
+| `style_selector_matches` | Selector↔element match relationships |
+| `frontend_events` | Event handler bindings (`onclick`, `onChange`, etc.) |
+| `frontend_bindings` | Property bindings (`value={expr}`, directives) |
+| `render_relationships` | Component→component render graph (parent renders child) |
+| `frontend_diagnostics` | Extraction diagnostics (fatal, recoverable, unresolved, unsupported) |
+
+### Frontend Query Methods (CodeIndexSDK)
+
+```python
+from indexing.code_index_sdk import CodeIndexSDK
+
+with CodeIndexSDK("code_index.db") as sdk:
+    # Source-location lookup
+    entities = sdk.lookup_frontend_entity("src/App.tsx", line=10, column=5)
+
+    # Render graph traversal
+    tree = sdk.traverse_render_graph(component_id, direction="children")
+
+    # Markup tree traversal
+    tree = sdk.traverse_markup_tree(element_id, direction="children")
+
+    # Style selector ↔ element graph
+    graph = sdk.traverse_style_graph(selector_id)
+
+    # Event handler graph
+    events = sdk.traverse_event_graph(element_id)
+
+    # Binding graph
+    bindings = sdk.traverse_binding_graph(element_id)
+
+    # Component → implementation code link
+    code = sdk.traverse_component_to_code(component_id)
+
+    # Combined traversal (render + markup + events + bindings + styles)
+    full = sdk.traverse_full_frontend(component_id)
+
+    # Runtime element resolution (browser metadata → source entities)
+    result = sdk.resolve_runtime_element(metadata_dict)
+
+    # Diagnostics
+    diags = sdk.get_frontend_diagnostics(file_id)
+    errors = sdk.get_diagnostics_by_severity("fatal")
+```
+
+### Frontend Graph Functions (RAG/graph.py)
+
+```python
+from RAG.graph import explore_frontend_structure, walk_render_tree
+
+# Get structured frontend view of a file
+json_result = explore_frontend_structure("src/App.tsx")
+
+# Walk the render tree from a component
+json_result = walk_render_tree("Card", file_path="src/Card.tsx")
+```
+
+### Cross-File Resolution
+
+After indexing, the `FrontendResolver.resolve_all()` pass resolves cross-file relationships:
+
+- **Render relationships**: `child_component_id` resolved by component name lookup
+- **Style imports**: `resolved_file_id` resolved by path normalization
+- **Custom property usages**: `resolved_property_id` resolved by property name
+- **Event handlers**: `handler_symbol_id` resolved by expression→function lookup
+- **Selector matches**: Recomputed from scratch (all selectors ↔ all elements)
+
+### Invalidation & Cascade Re-indexing
+
+When a file changes, `_get_dependent_files()` identifies dependent files via frontend dependency edges:
+
+- `render_relationships` — consumers of a changed component
+- `style_imports` — files importing a changed CSS file
+- `style_custom_property_usages` — files using a changed custom property
+- `frontend_events` — files referencing a changed handler symbol
+- `style_selector_matches` — bidirectional selector↔element consumers
+
+Dependent files are re-indexed, then `resolve_all()` refreshes all cross-file relationships.
+
+### Configuration
+
+Frontend indexing behavior can be configured via `.raggie/frontend_config.json`:
+
+```json
+{
+  "enabled": true,
+  "generated_dir_exclusions": ["node_modules", "dist", "build", ".next"],
+  "max_file_size_kb": 512,
+  "max_entities_per_file": 10000
+}
+```
+
+### CLI Flags
+
+```bash
+# Enable frontend indexing (default)
+python -m src.indexing.code_indexer . --frontend
+
+# Disable frontend indexing
+python -m src.indexing.code_indexer . --no-frontend
+
+# List frontend languages
+python -m src.indexing.code_indexer --list-frontend-languages
+```
+
+### JSON Export
+
+Frontend tables are included in JSON export output:
+
+```bash
+python -m src.indexing.code_indexer . --export-json output.json
+```
+
+The exported JSON includes all frontend tables (`frontend_components`, `markup_elements`, `style_selectors`, etc.) alongside the standard symbol tables.

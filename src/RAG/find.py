@@ -133,9 +133,237 @@ def find_symbol_location(symbol_name: str, file_path: str = None):
                         "kind": "class",
                     }
 
+            # Try frontend entities (components, CSS selectors, custom properties)
+            frontend_result = find_frontend_by_name(symbol_name, file_path)
+            if frontend_result:
+                return frontend_result
+
             return None
     except Exception:
         return None
+
+
+def find_frontend_entity_location(entity_type: str, entity_id: int):
+    """Find the file path and source range of a frontend entity by type and ID.
+
+    Args:
+        entity_type: One of "markup_element", "css_rule", "custom_property",
+                     "event_binding", "property_binding", "jsx_subtree", "component".
+        entity_id: ID of the entity in its table.
+
+    Returns:
+        dict with keys: file_path, start_line, end_line, source, kind
+        or None if not found.
+    """
+    db_path = Path.cwd() / ".raggie" / ".code_index.raggie"
+
+    if not db_path.exists():
+        return None
+
+    table_map = {
+        "markup_element": "markup_elements",
+        "jsx_subtree": "markup_elements",
+        "css_rule": "style_selectors",
+        "custom_property": "style_custom_properties",
+        "event_binding": "frontend_events",
+        "property_binding": "frontend_bindings",
+        "component": "frontend_components",
+    }
+
+    table = table_map.get(entity_type)
+    if not table:
+        return None
+
+    try:
+        with CodeIndexSDK(str(db_path)) as sdk:
+            import json as _json
+            row = sdk.conn.execute(
+                f"""SELECT m.*, f.path as file_path
+                    FROM {table} m
+                    JOIN files f ON m.file_id = f.id
+                    WHERE m.id = ?""",
+                (entity_id,)
+            ).fetchone()
+            if not row:
+                return None
+
+            sr = _json.loads(row["source_range"]) if row["source_range"] else None
+            if not sr:
+                return None
+
+            start_line = sr.get("start_line", 1)
+            end_line = sr.get("end_line", start_line)
+
+            source = sdk._read_source_lines(row["file_id"], start_line, end_line)
+
+            return {
+                "file_path": row["file_path"],
+                "start_line": start_line,
+                "end_line": end_line,
+                "source": source,
+                "kind": entity_type,
+            }
+    except Exception:
+        return None
+
+
+def find_frontend_by_name(name: str, file_path: str = None):
+    """Find a frontend entity by name (component name, selector text, etc.).
+
+    Args:
+        name: Component name, selector text, or custom property name.
+        file_path: Optional file path to disambiguate.
+
+    Returns:
+        dict with keys: file_path, start_line, end_line, source, kind, entity_type, entity_id
+        or None if not found.
+    """
+    db_path = Path.cwd() / ".raggie" / ".code_index.raggie"
+
+    if not db_path.exists():
+        return None
+
+    try:
+        with CodeIndexSDK(str(db_path)) as sdk:
+            import json as _json
+            conn = sdk.conn
+            file_id = None
+            if file_path:
+                f = sdk.get_file_by_path(file_path)
+                if f:
+                    file_id = f.id
+
+            # Try component name
+            if file_id:
+                row = conn.execute(
+                    """SELECT c.*, f.path as file_path
+                       FROM frontend_components c
+                       JOIN files f ON c.file_id = f.id
+                       WHERE c.name = ? AND c.file_id = ?
+                       LIMIT 1""",
+                    (name, file_id)
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """SELECT c.*, f.path as file_path
+                       FROM frontend_components c
+                       JOIN files f ON c.file_id = f.id
+                       WHERE c.name = ?
+                       LIMIT 1""",
+                    (name,)
+                ).fetchone()
+
+            if row:
+                sr = _json.loads(row["source_range"]) if row["source_range"] else None
+                start_line = sr.get("start_line", 1) if sr else 1
+                end_line = sr.get("end_line", start_line) if sr else start_line
+                source = sdk._read_source_lines(row["file_id"], start_line, end_line)
+                return {
+                    "file_path": row["file_path"],
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "source": source,
+                    "kind": "component",
+                    "entity_type": "component",
+                    "entity_id": row["id"],
+                }
+
+            # Try selector text
+            if file_id:
+                row = conn.execute(
+                    """SELECT s.*, f.path as file_path
+                       FROM style_selectors s
+                       JOIN files f ON s.file_id = f.id
+                       WHERE s.selector_text = ? AND s.file_id = ?
+                       LIMIT 1""",
+                    (name, file_id)
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """SELECT s.*, f.path as file_path
+                       FROM style_selectors s
+                       JOIN files f ON s.file_id = f.id
+                       WHERE s.selector_text = ?
+                       LIMIT 1""",
+                    (name,)
+                ).fetchone()
+
+            if row:
+                sr = _json.loads(row["source_range"]) if row["source_range"] else None
+                start_line = sr.get("start_line", 1) if sr else 1
+                end_line = sr.get("end_line", start_line) if sr else start_line
+                source = sdk._read_source_lines(row["file_id"], start_line, end_line)
+                return {
+                    "file_path": row["file_path"],
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "source": source,
+                    "kind": "css_rule",
+                    "entity_type": "css_rule",
+                    "entity_id": row["id"],
+                }
+
+            # Try custom property name
+            if file_id:
+                row = conn.execute(
+                    """SELECT cp.*, f.path as file_path
+                       FROM style_custom_properties cp
+                       JOIN files f ON cp.file_id = f.id
+                       WHERE cp.name = ? AND cp.file_id = ?
+                       LIMIT 1""",
+                    (name, file_id)
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """SELECT cp.*, f.path as file_path
+                       FROM style_custom_properties cp
+                       JOIN files f ON cp.file_id = f.id
+                       WHERE cp.name = ?
+                       LIMIT 1""",
+                    (name,)
+                ).fetchone()
+
+            if row:
+                sr = _json.loads(row["source_range"]) if row["source_range"] else None
+                start_line = sr.get("start_line", 1) if sr else 1
+                end_line = sr.get("end_line", start_line) if sr else start_line
+                source = sdk._read_source_lines(row["file_id"], start_line, end_line)
+                return {
+                    "file_path": row["file_path"],
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "source": source,
+                    "kind": "custom_property",
+                    "entity_type": "custom_property",
+                    "entity_id": row["id"],
+                }
+
+            return None
+    except Exception:
+        return None
+
+
+def find_frontend_entity(entity_type: str, name: str, file_path: str = None):
+    """Find a frontend entity by type and name.
+
+    Args:
+        entity_type: One of "component", "css_rule", "custom_property",
+                     "markup_element", "event_binding", "property_binding".
+        name: Component name, selector text, custom property name, or tag name.
+        file_path: Optional file path to disambiguate.
+
+    Returns:
+        dict with keys: file_path, start_line, end_line, source, kind, entity_type, entity_id
+        or None if not found.
+    """
+    if entity_type == "component":
+        return find_frontend_by_name(name, file_path)
+    if entity_type == "css_rule":
+        return find_frontend_by_name(name, file_path)
+    if entity_type == "custom_property":
+        return find_frontend_by_name(name, file_path)
+    # For markup_element, event_binding, property_binding — search by name in respective tables
+    return find_frontend_by_name(name, file_path)
 
 
 def find_symbol_implementation(symbol_name: str, file_path: str = None) -> str:

@@ -47,12 +47,16 @@ def parse_file(args):
     """Parse a single file and return extracted symbols as serializable data.
     
     Args:
-        args: (file_path, root_dir) tuple
+        args: (file_path, root_dir) or (file_path, root_dir, frontend_enabled) tuple
     
     Returns:
         dict with extracted symbols, or None if file should be skipped
     """
-    file_path, root_dir = args
+    if len(args) == 3:
+        file_path, root_dir, frontend_enabled = args
+    else:
+        file_path, root_dir = args
+        frontend_enabled = True
     file_path = Path(file_path)
     root_dir = Path(root_dir)
     
@@ -62,21 +66,60 @@ def parse_file(args):
         if not language:
             return None
         
+        source_bytes = read_file_content(file_path)
+        content_hash = xxhash.xxh64(source_bytes).hexdigest()
+        file_mtime = file_path.stat().st_mtime
+
+        # Dispatch HTML files to the HTML semantic extractor
+        if language == "html":
+            from indexing.frontend_config import load_frontend_config
+            config = load_frontend_config(str(root_dir))
+            if len(source_bytes) > config.max_frontend_file_size:
+                return {
+                    'file_path': str(file_path),
+                    'language': 'html',
+                    'content_hash': content_hash,
+                    'file_mtime': file_mtime,
+                    'imports': [],
+                    'functions': [],
+                    'classes': [],
+                    'variables': [],
+                    'type_aliases': [],
+                    'structs': [],
+                    'interfaces': [],
+                    'enums': [],
+                    'namespaces': [],
+                    'dependencies': [],
+                    'markup_elements': [],
+                    'frontend_events': [],
+                    'frontend_bindings': [],
+                    'render_relationships': [],
+                    'style_selector_matches': [],
+                    'frontend_diagnostics': [{
+                        'diagnostic_type': 'file_too_large',
+                        'severity': 'unsupported',
+                        'message': f'HTML file is {len(source_bytes)} bytes (threshold: {config.max_frontend_file_size}), skipping',
+                    }],
+                }
+            return _parse_html_file(file_path, root_dir, source_bytes, content_hash, file_mtime, config)
+
+        # Dispatch CSS files to the CSS semantic extractor
+        if language == "css":
+            from indexing.frontend_config import load_frontend_config
+            config = load_frontend_config(str(root_dir))
+            return _parse_css_file(file_path, root_dir, source_bytes, content_hash, file_mtime, config)
+
         parser = _get_parser(language)
         if parser is None:
             return None
         
-        source_bytes = read_file_content(file_path)
-        content_hash = xxhash.xxh64(source_bytes).hexdigest()
-        file_mtime = file_path.stat().st_mtime
-        
         tree = parser.parse(source_bytes)
         root_node = tree.root_node
         source_code = source_bytes.decode('utf-8', errors='ignore')
-        
-        # Extract imports
-        imports = extract_imports(root_node, source_code, language, root_dir)
-        
+
+        # Extract imports — pass source_bytes to avoid whole-source re-encoding
+        imports = extract_imports(root_node, source_bytes, language, root_dir)
+
         # Extract symbols
         functions = []
         classes = []
@@ -87,12 +130,20 @@ def parse_file(args):
         enums = []
         namespaces = []
         dependencies = []
-        
+
         _extract_symbols(
-            root_node, source_code, language, file_path, root_dir,
+            root_node, source_bytes, language, file_path, root_dir,
             functions, classes, variables, type_aliases, structs, interfaces, enums, namespaces, dependencies
         )
-        
+
+        # Extract JSX semantics for JS/TSX files (additive to existing symbols)
+        # Skip JSX extraction for plain JavaScript when frontend is disabled
+        jsx_data = {}
+        if language == "tsx" or (language == "javascript" and frontend_enabled):
+            from indexing.frontend_config import load_frontend_config
+            jsx_config = load_frontend_config(str(root_dir))
+            jsx_data = _extract_jsx_data(source_bytes, language, jsx_config, tree=tree)
+
         return {
             'file_path': str(file_path),
             'language': language,
@@ -108,9 +159,80 @@ def parse_file(args):
             'enums': enums,
             'namespaces': namespaces,
             'dependencies': dependencies,
+            'frontend_components': jsx_data.get('frontend_components', []),
+            'markup_elements': jsx_data.get('markup_elements', []),
+            'frontend_events': jsx_data.get('frontend_events', []),
+            'frontend_bindings': jsx_data.get('frontend_bindings', []),
+            'render_relationships': jsx_data.get('render_relationships', []),
+            'style_selector_matches': jsx_data.get('style_selector_matches', []),
+            'frontend_diagnostics': jsx_data.get('frontend_diagnostics', []),
         }
     except Exception as e:
         return {'error': str(e), 'file_path': str(file_path)}
+
+
+def _maybe_extract_arrow_function(node, source_code, var_info, functions, dependencies):
+    """Check if a variable declaration assigns an arrow function or function expression.
+
+    If so, register it as a function in addition to being a variable.
+    This captures React components like: const MyComponent = () => { ... }
+    and handlers like: const handleClick = (e) => { ... }
+    """
+    # Walk the node's children to find variable_declarator → arrow_function/function_expression
+    stack = list(node.children)
+    while stack:
+        child = stack.pop()
+        if child.type == "variable_declarator":
+            for vc in child.children:
+                if vc.type in ("arrow_function", "function_expression"):
+                    func_info = {
+                        "type": "function",
+                        "name": var_info["name"],
+                        "location": var_info["location"],
+                        "parameters": _extract_arrow_params(vc, source_code),
+                        "return_type": None,
+                        "docstring": None,
+                        "branch_count": _count_branches_in_node(vc, source_code),
+                    }
+                    func_index = len(functions)
+                    functions.append(func_info)
+                    _extract_deps(vc, source_code, "javascript", dependencies, func_index)
+                    return
+            # Also push declarator children for deeper search
+            stack.extend(child.children)
+
+
+def _extract_arrow_params(func_node, source_code):
+    """Extract parameter names from an arrow_function or function_expression node."""
+    params = []
+    for child in func_node.children:
+        if child.type == "formal_parameters":
+            for p in child.children:
+                if p.type == "identifier":
+                    params.append({"name": extract_node_text(p, source_code), "type": None})
+                elif p.type == "assignment_pattern":
+                    # Default parameter: (x = 1)
+                    for ap in p.children:
+                        if ap.type == "identifier":
+                            params.append({"name": extract_node_text(ap, source_code), "type": None})
+                            break
+        elif child.type == "identifier":
+            # Single param without parens: x => ...
+            params.append({"name": extract_node_text(child, source_code), "type": None})
+    return params
+
+
+def _count_branches_in_node(node, source_code):
+    """Count if/else/switch/for/while/try branches inside a node (non-recursive)."""
+    count = 0
+    stack = list(node.children)
+    while stack:
+        child = stack.pop()
+        if child.type in ("if_statement", "for_statement", "for_in_statement",
+                          "while_statement", "switch_statement", "try_statement"):
+            count += 1
+        stack.extend(child.children)
+    return count
 
 
 def _extract_symbols(root_node, source_code, language, file_path, root_dir,
@@ -298,6 +420,9 @@ def _extract_symbols(root_node, source_code, language, file_path, root_dir,
                     if current_class_id is not None:
                         var_info['parent_class_id'] = current_class_id
                     variables.append(var_info)
+                    # JS/TS: detect arrow functions and function expressions assigned to variables
+                    if language in ("javascript", "tsx", "typescript"):
+                        _maybe_extract_arrow_function(node, source_code, var_info, functions, dependencies)
             continue
         
         # Rust global variables: const and static items
@@ -680,3 +805,278 @@ def _extract_deps(node, source_code, language, dependencies, func_index=None):
         if func_index is not None:
             dep['_func_index'] = func_index
         dependencies.append(dep)
+
+
+def _parse_html_file(file_path, root_dir, source_bytes, content_hash, file_mtime, config=None):
+    """Parse an HTML file using the frontend HTML extractor.
+
+    Returns a dict compatible with the standard parse_file output,
+    with additional frontend-specific keys.
+    """
+    from indexing.frontend.html_extractor import extract_html_semantics
+
+    try:
+        frontend_data = extract_html_semantics(source_bytes, config=config)
+    except Exception as e:
+        return {
+            'file_path': str(file_path),
+            'language': 'html',
+            'content_hash': content_hash,
+            'file_mtime': file_mtime,
+            'error': f'HTML extraction failed: {e}',
+            'imports': [],
+            'functions': [],
+            'classes': [],
+            'variables': [],
+            'type_aliases': [],
+            'structs': [],
+            'interfaces': [],
+            'enums': [],
+            'namespaces': [],
+            'dependencies': [],
+            'markup_elements': [],
+            'frontend_events': [],
+            'style_selectors': [],
+            'style_custom_properties': [],
+            'style_custom_property_usages': [],
+            'style_imports': [],
+            'style_selector_matches': [],
+            'frontend_diagnostics': [{
+                'diagnostic_type': 'extraction_error',
+                'severity': 'fatal',
+                'message': str(e),
+            }],
+        }
+
+    # Extract script src as imports for dependency tracking
+    imports = []
+    for script in frontend_data.get("inline_scripts", []):
+        if script["type"] == "external":
+            imports.append({
+                'name': script['src'],
+                'location': script.get('location'),
+                'is_external': True,
+            })
+
+    # Extract stylesheet links as imports too
+    for style_import in frontend_data.get("style_imports", []):
+        imports.append({
+            'name': style_import['import_path'],
+            'location': style_import.get('source_range'),
+            'is_external': style_import.get('is_external', False),
+        })
+
+    # Parse inline scripts as JavaScript and merge executable symbols
+    functions = []
+    classes = []
+    variables = []
+    dependencies = []
+    for script in frontend_data.get("inline_scripts", []):
+        if script["type"] != "inline":
+            continue
+        content = script.get("content", "")
+        if not content.strip():
+            continue
+        script_loc = script.get("location", {})
+        script_start_line = script_loc.get("start_line", 0)
+        script_start_col = script_loc.get("start_col", 0)
+        js_result = _parse_inline_js(content, str(file_path), script_start_line, script_start_col)
+        functions.extend(js_result.get("functions", []))
+        classes.extend(js_result.get("classes", []))
+        variables.extend(js_result.get("variables", []))
+        dependencies.extend(js_result.get("dependencies", []))
+
+    return {
+        'file_path': str(file_path),
+        'language': 'html',
+        'content_hash': content_hash,
+        'file_mtime': file_mtime,
+        'imports': imports,
+        'functions': functions,
+        'classes': classes,
+        'variables': variables,
+        'type_aliases': [],
+        'structs': [],
+        'interfaces': [],
+        'enums': [],
+        'namespaces': [],
+        'dependencies': dependencies,
+        'markup_elements': frontend_data.get('markup_elements', []),
+        'frontend_events': frontend_data.get('frontend_events', []),
+        'style_selectors': frontend_data.get('style_selectors', []),
+        'style_custom_properties': frontend_data.get('style_custom_properties', []),
+        'style_custom_property_usages': frontend_data.get('style_custom_property_usages', []),
+        'style_imports': frontend_data.get('style_imports', []),
+        'style_selector_matches': frontend_data.get('style_selector_matches', []),
+        'frontend_diagnostics': frontend_data.get('frontend_diagnostics', []),
+    }
+
+
+def _parse_inline_js(content, file_path, offset_line, offset_col):
+    """Parse inline JavaScript content and return extracted symbols.
+
+    Source locations are adjusted by the script's offset within the HTML file
+    so that they point to the correct positions in the parent HTML file.
+
+    Args:
+        content: JavaScript source text from an inline <script> block.
+        file_path: Path of the parent HTML file (for symbol location records).
+        offset_line: Starting line of the script content within the HTML file.
+        offset_col: Starting column of the script content within the HTML file.
+
+    Returns:
+        dict with functions, classes, variables, dependencies lists.
+    """
+    result = {"functions": [], "classes": [], "variables": [], "dependencies": []}
+    try:
+        source_bytes = content.encode("utf-8")
+        parser = _get_parser("javascript")
+        if parser is None:
+            return result
+        tree = parser.parse(source_bytes)
+        root_node = tree.root_node
+        source_code = content
+
+        functions = []
+        classes = []
+        variables = []
+        type_aliases = []
+        structs = []
+        interfaces = []
+        enums = []
+        namespaces = []
+        dependencies = []
+
+        _extract_symbols(
+            root_node, source_code, "javascript", Path(file_path), Path(file_path).parent,
+            functions, classes, variables, type_aliases, structs, interfaces, enums, namespaces, dependencies
+        )
+
+        def _adjust_location(loc):
+            if loc is None:
+                return None
+            adjusted = dict(loc)
+            if "start_line" in adjusted:
+                adjusted["start_line"] = adjusted["start_line"] + offset_line
+            if "end_line" in adjusted:
+                adjusted["end_line"] = adjusted["end_line"] + offset_line
+            return adjusted
+
+        for func in functions:
+            func["location"] = _adjust_location(func.get("location"))
+            result["functions"].append(func)
+
+        for cls in classes:
+            cls["location"] = _adjust_location(cls.get("location"))
+            result["classes"].append(cls)
+
+        for var in variables:
+            var["location"] = _adjust_location(var.get("location"))
+            result["variables"].append(var)
+
+        for dep in dependencies:
+            dep["location"] = _adjust_location(dep.get("location"))
+            result["dependencies"].append(dep)
+
+    except Exception:
+        pass
+
+    return result
+
+
+def _parse_css_file(file_path, root_dir, source_bytes, content_hash, file_mtime, config=None):
+    """Parse a CSS file using the frontend CSS extractor.
+
+    Returns a dict compatible with the standard parse_file output,
+    with additional frontend-specific keys.
+    """
+    from indexing.frontend.css_extractor import extract_css_semantics
+
+    try:
+        frontend_data = extract_css_semantics(source_bytes, config=config, file_path=str(file_path))
+    except Exception as e:
+        return {
+            'file_path': str(file_path),
+            'language': 'css',
+            'content_hash': content_hash,
+            'file_mtime': file_mtime,
+            'error': f'CSS extraction failed: {e}',
+            'imports': [],
+            'functions': [],
+            'classes': [],
+            'variables': [],
+            'type_aliases': [],
+            'structs': [],
+            'interfaces': [],
+            'enums': [],
+            'namespaces': [],
+            'dependencies': [],
+            'style_selectors': [],
+            'style_custom_properties': [],
+            'style_custom_property_usages': [],
+            'style_keyframes': [],
+            'style_imports': [],
+            'frontend_diagnostics': [{
+                'diagnostic_type': 'extraction_error',
+                'severity': 'fatal',
+                'message': str(e),
+            }],
+        }
+
+    # Extract @import as imports for dependency tracking
+    imports = []
+    for imp in frontend_data.get("style_imports", []):
+        imports.append({
+            'name': imp['import_path'],
+            'location': imp.get('source_range'),
+            'is_external': imp.get('is_external', False),
+        })
+
+    return {
+        'file_path': str(file_path),
+        'language': 'css',
+        'content_hash': content_hash,
+        'file_mtime': file_mtime,
+        'imports': imports,
+        'functions': [],
+        'classes': [],
+        'variables': [],
+        'type_aliases': [],
+        'structs': [],
+        'interfaces': [],
+        'enums': [],
+        'namespaces': [],
+        'dependencies': [],
+        'style_selectors': frontend_data.get('style_selectors', []),
+        'style_custom_properties': frontend_data.get('style_custom_properties', []),
+        'style_custom_property_usages': frontend_data.get('style_custom_property_usages', []),
+        'style_keyframes': frontend_data.get('style_keyframes', []),
+        'style_imports': frontend_data.get('style_imports', []),
+        'frontend_diagnostics': frontend_data.get('frontend_diagnostics', []),
+    }
+
+
+def _extract_jsx_data(source_bytes, language, config=None, tree=None):
+    """Extract JSX semantics from JS/TSX source bytes.
+
+    Returns a dict with frontend component data, or empty dict on error.
+    If tree is provided (already parsed by the caller), reuses it instead of re-parsing.
+    """
+    from indexing.frontend.jsx_extractor import extract_jsx_semantics
+
+    try:
+        return extract_jsx_semantics(source_bytes, language=language, config=config, tree=tree)
+    except Exception as e:
+        return {
+            "frontend_components": [],
+            "markup_elements": [],
+            "frontend_events": [],
+            "frontend_bindings": [],
+            "render_relationships": [],
+            "style_selector_matches": [],
+            "frontend_diagnostics": [{
+                "diagnostic_type": "jsx_extraction_error",
+                "severity": "recoverable",
+                "message": str(e),
+            }],
+        }

@@ -19,9 +19,13 @@ def get_node_location(node):
 
 
 def extract_node_text(node, source_code):
-    """Extract the text content of a node from source code."""
-    # tree-sitter uses byte offsets, but Python strings use character indices
-    # For UTF-8 with multi-byte characters, we need to convert to bytes first
+    """Extract the text content of a node from source code.
+
+    Accepts either a str (which will be encoded to UTF-8 each call) or bytes
+    (which is used directly, avoiding repeated whole-source encoding).
+    """
+    if isinstance(source_code, bytes):
+        return source_code[node.start_byte:node.end_byte].decode('utf-8')
     source_bytes = source_code.encode('utf-8')
     return source_bytes[node.start_byte:node.end_byte].decode('utf-8')
 

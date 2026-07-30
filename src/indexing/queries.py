@@ -1410,3 +1410,133 @@ class DescriptionMixin:
                 undocumented[label] = symbols
 
         return undocumented
+
+    # ==================== Frontend Source-Location Lookup ====================
+
+    def lookup_frontend_entity(self, file_path: str, line: int, column: int,
+                               include_backend: bool = False) -> List[Dict[str, Any]]:
+        """Look up the most specific frontend entity at a source location.
+
+        Args:
+            file_path: Project-relative path of the file.
+            line: 1-indexed line number.
+            column: 0-indexed column number.
+            include_backend: If True, also search functions/classes.
+
+        Returns:
+            List of entity dicts sorted by narrowest range first.
+            Each dict contains: entity_type, entity_id, file_id, file_path,
+            source_range, name, and any extra columns from the source table.
+        """
+        from indexing.frontend.location_lookup import lookup_entity_at_location
+
+        matches = lookup_entity_at_location(
+            self.conn, file_path, line, column, include_backend
+        )
+        return [m.to_dict() for m in matches]
+
+    # ==================== Frontend Graph Traversal (Phase 8) ====================
+
+    def traverse_render_graph(self, component_id: int, direction: str = "children",
+                              max_depth: int = 10) -> Dict[str, Any]:
+        """Traverse the component render graph (children or parents)."""
+        from indexing.frontend.graph import traverse_render_graph as _traverse
+        return _traverse(self.conn, component_id, direction, max_depth)
+
+    def traverse_markup_tree(self, element_id: int, direction: str = "children",
+                             max_depth: int = 10) -> Dict[str, Any]:
+        """Traverse the markup element tree (children or parents)."""
+        from indexing.frontend.graph import traverse_markup_tree as _traverse
+        return _traverse(self.conn, element_id, direction, max_depth)
+
+    def traverse_style_graph(self, selector_id: int, direction: str = "using_elements",
+                             max_depth: int = 10) -> Dict[str, Any]:
+        """Traverse the style selector ↔ element graph."""
+        from indexing.frontend.graph import traverse_style_graph as _traverse
+        return _traverse(self.conn, selector_id, direction, max_depth)
+
+    def traverse_event_graph(self, element_id: int) -> Dict[str, Any]:
+        """Traverse element → event handlers → handler symbols."""
+        from indexing.frontend.graph import traverse_event_graph as _traverse
+        return _traverse(self.conn, element_id)
+
+    def traverse_binding_graph(self, element_id: int) -> Dict[str, Any]:
+        """Traverse element → bindings → referenced expressions."""
+        from indexing.frontend.graph import traverse_binding_graph as _traverse
+        return _traverse(self.conn, element_id)
+
+    def traverse_component_to_code(self, component_id: int,
+                                   max_depth: int = 5) -> Dict[str, Any]:
+        """Link a component to its implementation function/class and call tree."""
+        from indexing.frontend.graph import traverse_component_to_code as _traverse
+        return _traverse(self.conn, component_id, max_depth)
+
+    def traverse_full_frontend(self, component_id: int,
+                               max_depth: int = 10) -> Dict[str, Any]:
+        """Combined traversal: render + markup + events + bindings + styles."""
+        from indexing.frontend.graph import traverse_full_frontend as _traverse
+        return _traverse(self.conn, component_id, max_depth)
+
+    # ==================== Frontend Runtime Resolution (Phase 9) ====================
+
+    def resolve_runtime_element(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """Resolve browser/runtime element metadata to source semantic entities.
+
+        Args:
+            metadata: Dict with keys like source_file, source_line, source_column,
+                      component_name, component_ancestry, dom_tag, element_id,
+                      classes, attributes, text, dom_ancestry.
+
+        Returns:
+            Dict with candidates (sorted by confidence), ambiguity_explanation,
+            and best_confidence.
+        """
+        from indexing.frontend.runtime_resolver import resolve_runtime_element as _resolve
+        project_root = getattr(self, 'root_dir', None)
+        return _resolve(self.conn, metadata, project_root=project_root)
+
+    # ==================== Frontend Diagnostics (Phase 13) ====================
+
+    def get_frontend_diagnostics(self, file_id: int) -> List[Dict[str, Any]]:
+        """Get all diagnostics for a frontend file.
+
+        Args:
+            file_id: ID of the file to get diagnostics for.
+
+        Returns:
+            List of diagnostic dicts with keys: id, file_id, diagnostic_type,
+            severity, message, source_range.
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """SELECT d.id, d.file_id, d.diagnostic_type, d.severity,
+                      d.message, d.source_range, f.path as file_path
+               FROM frontend_diagnostics d
+               JOIN files f ON d.file_id = f.id
+               WHERE d.file_id = ?
+               ORDER BY d.id""",
+            (file_id,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    def get_diagnostics_by_severity(self, severity: str) -> List[Dict[str, Any]]:
+        """Get all diagnostics matching a severity level.
+
+        Args:
+            severity: One of 'fatal', 'recoverable', 'unresolved', 'unsupported', 'info'.
+
+        Returns:
+            List of diagnostic dicts with keys: id, file_id, diagnostic_type,
+            severity, message, source_range, file_path.
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """SELECT d.id, d.file_id, d.diagnostic_type, d.severity,
+                      d.message, d.source_range, f.path as file_path
+               FROM frontend_diagnostics d
+               JOIN files f ON d.file_id = f.id
+               WHERE d.severity = ?
+               ORDER BY d.id""",
+            (severity,)
+        )
+        return [dict(row) for row in cursor.fetchall()]

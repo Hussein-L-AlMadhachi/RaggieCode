@@ -1,13 +1,21 @@
 import os
 
-from RAG.find import find_symbol_location
+from RAG.find import find_symbol_location, find_frontend_entity_location
 from .utils import is_ignored_by_gitignore, is_within_cwd, BLUE, RESET, auto_record_change, reindex_after_change
+
+# Frontend entity types that can be edited via edit_safety
+_FRONTEND_ENTITY_TYPES = {
+    "markup_element", "css_rule", "custom_property",
+    "event_binding", "property_binding", "jsx_subtree",
+}
 
 
 def handle(arguments, toolcall_id, session_id=None, code_indexer=None):
     symbol_name = arguments["symbol_name"]
     file_path = arguments.get("file_path")
     new_source = arguments.get("new_source")
+    entity_type = arguments.get("entity_type")
+    entity_id = arguments.get("entity_id")
 
     print(f"{BLUE}EditSymbol {symbol_name}{RESET}")
 
@@ -19,6 +27,14 @@ def handle(arguments, toolcall_id, session_id=None, code_indexer=None):
         }
 
     try:
+        # Frontend entity edit path
+        if entity_type and entity_type in _FRONTEND_ENTITY_TYPES and entity_id is not None:
+            return _handle_frontend_edit(
+                entity_type, entity_id, new_source, file_path,
+                toolcall_id, session_id, code_indexer,
+            )
+
+        # Standard symbol edit path (functions, classes)
         loc = find_symbol_location(symbol_name, file_path)
         if loc is None:
             hint = ""
@@ -131,3 +147,104 @@ def handle(arguments, toolcall_id, session_id=None, code_indexer=None):
             "tool_call_id": toolcall_id,
             "content": f"Error executing edit_symbol: {str(e)}",
         }
+
+
+def _handle_frontend_edit(entity_type, entity_id, new_source, file_path,
+                          toolcall_id, session_id, code_indexer):
+    """Handle editing of frontend semantic entities via edit_safety."""
+    from pathlib import Path
+    from indexing.frontend.edit_safety import validate_edit_range, apply_frontend_edit
+
+    db_path = Path.cwd() / ".raggie" / ".code_index.raggie"
+    if not db_path.exists():
+        return {
+            "role": "tool",
+            "tool_call_id": toolcall_id,
+            "content": f"Error: Code index database not found at {db_path}",
+        }
+
+    import sqlite3
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+
+    try:
+        # Resolve file_path if not provided
+        if not file_path:
+            loc = find_frontend_entity_location(entity_type, entity_id)
+            if loc is None:
+                return {
+                    "role": "tool",
+                    "tool_call_id": toolcall_id,
+                    "content": f"Error: Could not resolve file path for {entity_type}#{entity_id}",
+                }
+            file_path = loc["file_path"]
+
+        # Security checks
+        resolved = file_path
+        if not os.path.isabs(resolved):
+            for base in [os.getcwd(), os.path.join(os.getcwd(), "src")]:
+                candidate = os.path.join(base, resolved)
+                if os.path.exists(candidate):
+                    resolved = candidate
+                    break
+
+        if not is_within_cwd(resolved):
+            return {
+                "role": "tool",
+                "tool_call_id": toolcall_id,
+                "content": "Error: access denied - path is outside the current working directory",
+            }
+
+        if is_ignored_by_gitignore(resolved):
+            return {
+                "role": "tool",
+                "tool_call_id": toolcall_id,
+                "content": (
+                    f"Error: File '{resolved}' is in .gitignore. "
+                    "Operations on gitignored files are not allowed."
+                ),
+            }
+
+        # Apply the edit
+        result = apply_frontend_edit(conn, entity_type, entity_id, new_source, file_path)
+
+        if not result.success:
+            return {
+                "role": "tool",
+                "tool_call_id": toolcall_id,
+                "content": f"Error: Edit rejected: {result.reason}",
+            }
+
+        # Record the change
+        if session_id is not None:
+            from Agent.chat_history_db import record_session_file
+            record_session_file(session_id, result.file_path, "edit_symbol")
+            auto_record_change(
+                session_id, result.file_path, "file_edit",
+                f"Edited {entity_type}#{entity_id} in {result.file_path}",
+                result.diff,
+            )
+
+        # Reindex
+        reindex_after_change(code_indexer)
+
+        summary = (
+            f"Replaced {entity_type}#{entity_id} in {result.file_path} "
+            f"(lines {result.source_range['start_line']}-{result.source_range['end_line']}):\n\n"
+            f"{result.diff}"
+        )
+
+        return {
+            "role": "tool",
+            "tool_call_id": toolcall_id,
+            "content": summary,
+        }
+
+    except Exception as e:
+        return {
+            "role": "tool",
+            "tool_call_id": toolcall_id,
+            "content": f"Error executing frontend edit: {str(e)}",
+        }
+    finally:
+        conn.close()

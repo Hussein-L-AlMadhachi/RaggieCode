@@ -242,6 +242,9 @@ def export_to_json(db_path, output_file):
         
         json_index["files"][relative_path] = file_info
     
+    # Export frontend tables
+    _export_frontend_tables(conn, json_index)
+    
     conn.close()
     
     # Write to JSON file
@@ -262,6 +265,56 @@ def export_to_json(db_path, output_file):
     print(f"Total interfaces: {json_index['total_interfaces']}")
     print(f"Total variables: {json_index['total_variables']}")
     print(f"Total type aliases: {json_index['total_type_defs']}")
+    
+    # Frontend summary
+    frontend_keys = ["frontend_components", "markup_elements", "style_selectors",
+                     "frontend_events", "frontend_bindings", "render_relationships",
+                     "frontend_diagnostics"]
+    has_frontend = any(k in json_index and json_index[k] for k in frontend_keys)
+    if has_frontend:
+        print("\n--- Frontend Summary ---")
+        for k in frontend_keys:
+            if k in json_index:
+                print(f"  {k}: {len(json_index[k])}")
+
+
+def _export_frontend_tables(conn, json_index):
+    """Export frontend semantic tables to the JSON index."""
+    cursor = conn.cursor()
+    
+    frontend_tables = [
+        ("frontend_components", "frontend_components"),
+        ("markup_elements", "markup_elements"),
+        ("style_selectors", "style_selectors"),
+        ("style_custom_properties", "style_custom_properties"),
+        ("style_custom_property_usages", "style_custom_property_usages"),
+        ("style_keyframes", "style_keyframes"),
+        ("style_imports", "style_imports"),
+        ("style_selector_matches", "style_selector_matches"),
+        ("frontend_events", "frontend_events"),
+        ("frontend_bindings", "frontend_bindings"),
+        ("render_relationships", "render_relationships"),
+        ("frontend_diagnostics", "frontend_diagnostics"),
+    ]
+    
+    for table_name, key in frontend_tables:
+        try:
+            cursor.execute(f"SELECT * FROM {table_name} ORDER BY id")
+            rows = cursor.fetchall()
+            json_index[key] = []
+            for row in rows:
+                entry = {}
+                for col in row.keys():
+                    val = row[col]
+                    if val is not None and isinstance(val, str) and val.startswith('{'):
+                        try:
+                            val = json.loads(val)
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    entry[col] = val
+                json_index[key].append(entry)
+        except sqlite3.OperationalError:
+            pass
 
 
 def main():
