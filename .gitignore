@@ -15,3 +15,4 @@ build/
 .code_index.raggie
 .raggie.chat
 *.egg-info/
+AGENTS.md

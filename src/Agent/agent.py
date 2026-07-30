@@ -1,4 +1,6 @@
 import os
+import glob
+import sys
 import json
 import shutil
 import platform
@@ -97,13 +99,84 @@ class Agent:
         # Initialize git manager for commit/undo/redo operations
         self.git_manager = GitManager(root_dir=os.getcwd())
 
-        # Index the codebase at the start of each conversation
-        try:
-            with self.console.status("[bold green]Indexing codebase...", spinner="dots"):
-                self.code_indexer.index_directory()
-        except (KeyboardInterrupt, EOFError):
-            self.console.print("\n[yellow]Indexing interrupted. Using existing index.[/yellow]")
-            self.code_indexer._connect()
+        # Check if this looks like a project directory before indexing
+        cwd = os.getcwd()
+        project_markers = [
+            # VCS
+            ".git", ".hg", ".svn",
+            # Python
+            "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt",
+            "Pipfile", "poetry.lock", "uv.lock", "tox.ini", "MANIFEST.in",
+            # JavaScript / TypeScript
+            "package.json", "tsconfig.json", "yarn.lock", "pnpm-lock.yaml",
+            "package-lock.json", "bower.json", ".npmrc", "deno.json",
+            # Go
+            "go.mod", "go.sum", "go.work",
+            # Rust
+            "Cargo.toml",
+            # C / C++
+            "CMakeLists.txt", "Makefile", "Makefile.am", "configure.ac",
+            "meson.build", "BUCK", "BUILD", "BUILD.bazel", "WORKSPACE",
+            # C# / .NET
+            "Directory.Build.props", "global.json",
+            # Java / Kotlin
+            "pom.xml", "build.gradle", "build.gradle.kts",
+            "settings.gradle", "settings.gradle.kts", "gradle.properties",
+            # PHP
+            "composer.json", "artisan",
+            # Ruby
+            "Gemfile", "Rakefile", ".rspec",
+            # Elixir
+            "mix.exs",
+            # Zig
+            "build.zig",
+            # Dart / Flutter
+            "pubspec.yaml",
+            # Lua
+            "rockspec",
+            # Generic / editor
+            ".raggie", ".vscode", ".idea", ".editorconfig",
+        ]
+        is_project = any(os.path.exists(os.path.join(cwd, m)) for m in project_markers)
+        if not is_project:
+            is_project = bool(glob.glob(os.path.join(cwd, "*.csproj")) or glob.glob(os.path.join(cwd, "*.sln")))
+
+        if is_project:
+            try:
+                with self.console.status("[bold green]Indexing codebase...", spinner="dots"):
+                    self.code_indexer.index_directory()
+            except (KeyboardInterrupt, EOFError):
+                self.console.print("\n[yellow]Indexing interrupted. Using existing index.[/yellow]")
+                self.code_indexer._connect()
+        elif self.is_subagent:
+            self.console.print(
+                f"[yellow]Warning:[/yellow] '{cwd}' doesn't look like a project directory. "
+                f"Skipping indexing."
+            )
+        else:
+            self.console.print(
+                f"[yellow]Warning:[/yellow] '{cwd}' doesn't look like a project directory "
+                f"(no .git, pyproject.toml, package.json, go.mod, Cargo.toml, etc. found).\n"
+                f"Indexing here may scan unrelated files and take a long time."
+            )
+            try:
+                response = input("\nIndex anyway? (y/N): ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                response = "n"
+
+            if response in ("y", "yes"):
+                try:
+                    with self.console.status("[bold green]Indexing codebase...", spinner="dots"):
+                        self.code_indexer.index_directory()
+                except (KeyboardInterrupt, EOFError):
+                    self.console.print("\n[yellow]Indexing interrupted. Using existing index.[/yellow]")
+                    self.code_indexer._connect()
+            else:
+                self.console.print(
+                    "Please cd into your project directory and try again.\n"
+                    "To start a new project: raggie code <project-name>"
+                )
+                sys.exit(0)
 
         # Display previous chat history if it exists (skip for subagents — they
         # share the chat_id but don't need the parent's conversation printed)

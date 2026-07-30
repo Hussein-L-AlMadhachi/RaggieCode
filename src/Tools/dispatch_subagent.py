@@ -1,9 +1,5 @@
 from .utils import BLUE, RESET
 
-# Safety limits
-MAX_SUBAGENT_DEPTH = 3
-DEFAULT_TIMEOUT = 300  # 5 minutes
-
 
 def _get_session_depth(session_id: int) -> int:
     """Calculate the depth of a session in the subagent hierarchy by traversing parent_session_id."""
@@ -82,7 +78,6 @@ def _collect_subagent_output(subagent, subagent_session_id, prompt=None, resume=
 
 def handle(arguments, toolcall_id, parent_session_id=None, skip_depth_check=False):
     prompt = arguments.get("prompt")
-    timeout = arguments.get("timeout", DEFAULT_TIMEOUT)
 
     if not prompt:
         return {
@@ -98,7 +93,8 @@ def handle(arguments, toolcall_id, parent_session_id=None, skip_depth_check=Fals
             "content": "Error: parent_session_id is required to determine the subagent role",
         }
 
-    from Agent.chat_history_db import get_session_role
+    from Agent.chat_history_db import get_session_role, get_session_effort, get_session_depth
+    from Agent.effort_levels import is_depth_allowed, effort_name, effort_max_depth
     role = get_session_role(parent_session_id)
     if not role:
         return {
@@ -107,16 +103,16 @@ def handle(arguments, toolcall_id, parent_session_id=None, skip_depth_check=Fals
             "content": f"Error: Could not determine role for parent session {parent_session_id}",
         }
 
-    # Check depth limit if parent_session_id is provided
-    current_depth = 0
-    if parent_session_id is not None and not skip_depth_check:
-        current_depth = _get_session_depth(parent_session_id)
-        print(f"{BLUE}Subagent depth: {current_depth}/{MAX_SUBAGENT_DEPTH}{RESET}")
-        if current_depth >= MAX_SUBAGENT_DEPTH:
+    # Check depth limit via the effort system
+    if not skip_depth_check:
+        effort = get_session_effort(parent_session_id)
+        depth = get_session_depth(parent_session_id)
+        if effort is not None and not is_depth_allowed(effort, depth):
+            max_d = effort_max_depth(effort)
             return {
                 "role": "tool",
                 "tool_call_id": toolcall_id,
-                "content": f"Error: Maximum subagent depth ({MAX_SUBAGENT_DEPTH}) reached. Current depth: {current_depth}",
+                "content": f"Cannot dispatch subagent: effort level '{effort_name(effort)}' limits depth to {max_d}. Current depth is {depth}.",
             }
 
     try:
