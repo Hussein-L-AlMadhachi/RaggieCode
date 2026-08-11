@@ -1,0 +1,52 @@
+{
+  "name": "raggie-code-tools",
+  "displayName": "Raggie Code Tools",
+  "description": "Copy the current selection as @path/to/file:23-43",
+  "version": "0.1.0",
+  "publisher": "HusseinAlmadhaji",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "copyRef.copySelection",
+        "title": "Copy Reference for Raggie Code"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "copyRef.copySelection",
+          "when": "editorHasSelection",
+          "group": "9_cutcopypaste@1"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "copyRef.copySelection",
+        "key": "ctrl+alt+c",
+        "mac": "cmd+alt+c",
+        "when": "editorHasSelection"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}

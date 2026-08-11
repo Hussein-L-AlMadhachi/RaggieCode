@@ -392,7 +392,12 @@ def find_symbol_implementation(symbol_name: str, file_path: str = None) -> str:
             class_body = sdk.get_class_body(symbol_name, file_path)
             if class_body:
                 return class_body
-            
+
+            # Try to find as variable
+            variable_body = sdk.get_variable_body(symbol_name, file_path)
+            if variable_body:
+                return variable_body
+
             # Search for similar symbols by name and description
             matches = sdk.search_symbols(symbol_name, limit=10)
             

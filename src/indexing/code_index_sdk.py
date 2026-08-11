@@ -804,6 +804,29 @@ class CodeIndexSDK(QueryMixin, DescriptionMixin):
         
         return ""
 
+    def get_variable_body(self, variable_name: str, file_path: Optional[str] = None) -> Optional[str]:
+        """Get the declaration source lines of a variable by name.
+
+        Args:
+            variable_name: Name of the variable.
+            file_path: Optional relative file path to disambiguate same-name variables.
+
+        Returns:
+            Source code string of the declaration, or None if not found / file unresolvable.
+        """
+        file_id = None
+        if file_path:
+            f = self.get_file_by_path(file_path)
+            if f:
+                file_id = f.id
+
+        matches = self.get_variable_by_name(variable_name, file_id)
+        if not matches:
+            return None
+
+        var = matches[0]
+        return self._read_source_lines(var.file_id, var.location.start_line, var.location.end_line)
+
     def get_class_body(self, class_name: str, file_path: Optional[str] = None) -> Optional[str]:
         """Get the source body of a class by name.
         
