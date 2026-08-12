@@ -620,6 +620,33 @@ def main():
     if not project_dir.exists():
         project_dir.mkdir(parents=True, exist_ok=True)
     os.chdir(str(project_dir))
+
+    # Check if .raggie exists — if so, the user has already confirmed
+    # this is a project directory (or raggie created it). Skip the warning.
+    cwd = os.getcwd()
+    has_raggie = os.path.exists(os.path.join(cwd, ".raggie"))
+
+    if not has_raggie:
+        # Check if the directory has subdirectories — if it's flat,
+        # it's small enough to index without risk, skip the prompt.
+        has_subdirs = any(os.path.isdir(os.path.join(cwd, d)) for d in os.listdir(cwd))
+        if has_subdirs:
+            console.print(
+                f"[yellow]Warning:[/yellow] '{cwd}' doesn't look like a raggie project found here "
+                f"(no .raggie folder found).\n"
+                f"If this isn't your actual project directory the system here will scan unrelated files and can take a long time if there were so many."
+            )
+            try:
+                response = input("\nDo you want to create a new project here? (y/N): ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                response = "n"
+
+            if response not in ("y", "yes"):
+                console.print(
+                    "Please cd into your project directory and try again.\n"
+                    "To start a new project: raggie code <project-name>"
+                )
+                sys.exit(0)
     
     # Initialize database
     init_db()

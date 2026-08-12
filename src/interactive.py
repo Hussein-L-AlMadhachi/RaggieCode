@@ -3,8 +3,10 @@ Agent run loops for Raggie (interactive and non-interactive modes).
 """
 
 import json
+import re
 import sys
 from importlib.metadata import version
+from pathlib import Path
 from prompt_toolkit import prompt
 from rich.console import Console
 from rich.markdown import Markdown
@@ -17,6 +19,50 @@ console = Console()
 GREEN = "\033[32m"
 DIM = "\033[2m"
 RESET = "\033[0m"
+
+# Matches @path/to/file.x:23 and @path/to/file.x:23-43. The lookbehind rejects
+# @-mentions embedded in emails/handles, and the mandatory :N suffix ensures
+# only explicit line references are expanded.
+_FILE_REF_RE = re.compile(r'(?<![\w.@-])@([\w./\\-]+\.[A-Za-z0-9]+):(\d+)(?:-(\d+))?')
+
+
+def expand_file_references(text):
+    """Append referenced code snippets for @path/file.x:N[-M] mentions in user input.
+
+    References pointing to non-existent files are left untouched so emails,
+    handles, and plain text pass through unchanged.
+    """
+    snippets = []
+    seen = set()
+    for m in _FILE_REF_RE.finditer(text):
+        ref = m.group(0)
+        if ref in seen:
+            continue
+        seen.add(ref)
+
+        path_str, start, end = m.group(1), int(m.group(2)), m.group(3)
+        end = int(end) if end else start
+        if end < start:
+            start, end = end, start
+
+        path = Path(path_str)
+        if not path.is_file():
+            continue
+
+        try:
+            lines = path.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        if start > len(lines):
+            continue
+
+        end = min(end, len(lines))
+        chunk = "\n".join(f"{i}: {lines[i - 1]}" for i in range(start, end + 1))
+        snippets.append(f"--- {path_str}:{start}-{end} ---\n{chunk}")
+
+    if not snippets:
+        return text
+    return text + "\n\n<referenced_code>\n" + "\n\n".join(snippets) + "\n</referenced_code>"
 
 
 def _prompt_effort(session_id, value=None):
@@ -167,7 +213,6 @@ def run_interactive(agent, role):
     """
     model_name = agent.roles[role].get("model", "unknown")
     print(f"{GREEN}Raggie Agent ({role}) v{version('raggiecode')} - Interactive Mode{RESET}")
-    print(f"{GREEN}Press Esc followed by Enter to send message, or type 'exit' to quit{RESET}")
     print("-" * 50)
     print("\nuse /help to see all available commands")
 
@@ -190,6 +235,7 @@ def run_interactive(agent, role):
                 set_session_effort(agent.session_id, DEFAULT_EFFORT)
                 current = DEFAULT_EFFORT
             print(f"\n{DIM}Effort: {effort_name(current)} - to change it use /effort{RESET}")
+            print(f"{DIM}Press Esc followed by Enter to send message, or type 'exit' to quit{RESET}")
             print(f"{GREEN}\n\nYou:{RESET}")
             user_input = prompt("> ", multiline=True)
         except (EOFError, KeyboardInterrupt):
@@ -206,7 +252,7 @@ def run_interactive(agent, role):
             state = StreamState()
             depth = get_session_depth(agent.session_id)
             model_name = agent.roles[role].get("model", "unknown")
-            for event in agent.start(user_input):
+            for event in agent.start(expand_file_references(user_input)):
                 state = _print_event(event, state, depth, model_name)
         except KeyboardInterrupt:
             print("\n[interrupted]")
@@ -233,7 +279,7 @@ def run_non_interactive(agent, prompt_text, effort=None):
 
     try:
         state = StreamState()
-        for event in agent.start(prompt_text):
+        for event in agent.start(expand_file_references(prompt_text)):
             if event[0] == "error":
                 state._stop_live()
                 if state.reasoning_started:

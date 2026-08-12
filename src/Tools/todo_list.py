@@ -116,9 +116,7 @@ def handle_get_todo_list(arguments, toolcall_id, parent_session_id=None):
             if task.get('cancel_reason'):
                 output += f"{YELLOW}   Cancel reason: {task['cancel_reason']}{RESET}\n"
             output += "\n"
-        
-        print(output)
-        
+
         return {
             "role": "tool",
             "tool_call_id": toolcall_id,
