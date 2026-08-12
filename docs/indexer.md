@@ -658,36 +658,16 @@ Similarly, unresolved file-path references (external URLs or missing files) are 
 
 ### Project Directory Detection
 
-Before indexing, the agent checks whether the current working directory looks like a code project by scanning for **project marker files**. This prevents accidentally indexing unrelated directories (e.g. a user's home directory) which could take a very long time and produce a useless index.
-
-**Markers checked** (any one is sufficient):
-
-| Category | Markers |
-|----------|---------|
-| VCS | `.git`, `.hg`, `.svn` |
-| Python | `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements.txt`, `Pipfile`, `poetry.lock`, `uv.lock`, `tox.ini`, `MANIFEST.in` |
-| JavaScript/TypeScript | `package.json`, `tsconfig.json`, `yarn.lock`, `pnpm-lock.yaml`, `package-lock.json`, `bower.json`, `.npmrc`, `deno.json` |
-| Go | `go.mod`, `go.sum`, `go.work` |
-| Rust | `Cargo.toml` |
-| C/C++ | `CMakeLists.txt`, `Makefile`, `Makefile.am`, `configure.ac`, `meson.build`, `BUCK`, `BUILD`, `BUILD.bazel`, `WORKSPACE` |
-| C#/.NET | `Directory.Build.props`, `global.json`, `*.csproj`, `*.sln` (glob-matched) |
-| Java/Kotlin | `pom.xml`, `build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts`, `gradle.properties` |
-| PHP | `composer.json`, `artisan` |
-| Ruby | `Gemfile`, `Rakefile`, `.rspec` |
-| Elixir | `mix.exs` |
-| Zig | `build.zig` |
-| Dart/Flutter | `pubspec.yaml` |
-| Lua | `rockspec` |
-| Generic/editor | `.raggie`, `.vscode`, `.idea`, `.editorconfig` |
+Before indexing, the agent checks whether a `.raggie` folder exists in the current working directory. This folder is created by Raggie on first run, so its presence indicates the user has already confirmed this is a project directory. This prevents accidentally indexing unrelated directories (e.g. a user's home directory) which could take a very long time and produce a useless index.
 
 **Behavior:**
 
-- **Markers found** → indexing proceeds automatically.
-- **No markers found (interactive session)** → a warning is displayed and the user is prompted: `Index anyway? (y/N)`. Declining exits the agent with a suggestion to `cd` into a project directory or start a new one with `raggie code <project-name>`.
-- **No markers found (subagent session)** → indexing is skipped (subagents cannot prompt interactively).
+- **`.raggie` exists** → indexing proceeds automatically.
+- **No `.raggie` folder, but directory has no subdirectories** → indexing proceeds without prompting (a flat directory is small enough to be safe).
+- **No `.raggie` folder, directory has subdirectories (interactive session)** → a warning is displayed and the user is prompted: `Do you want to create a new project here? (y/N)`. Declining exits with a suggestion to `cd` into a project directory or start a new one with `raggie code <project-name>`.
 - **Manual re-indexing** → use the `/reindex` in-chat command at any time. Supports `/reindex --force` to re-index all files from scratch.
 
-This check is implemented in `Agent.__init__()` in `src/Agent/agent.py`, before the call to `CodeIndexSDK.index_directory()`.
+This check is implemented in `main()` in `src/raggie.py`, before the `Agent` is created. The `Agent` class itself is interface-agnostic and always indexes unconditionally. Subagents inherit the parent's `.raggie` folder (same working directory), so they always index normally.
 
 ### CLI Usage
 

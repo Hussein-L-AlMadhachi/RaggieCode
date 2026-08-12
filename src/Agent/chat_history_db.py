@@ -493,29 +493,104 @@ def save_message(session_id: int, message: Dict):
     conn.close()
 
 
+def repair_message_sequence(messages: List[Dict]) -> List[Dict]:
+    """Move each tool response to directly follow the assistant message that requested it.
+
+    A crash or interrupt can leave a session where an assistant message with
+    tool_calls is followed by user/other messages, with the tool responses
+    appended later. The chat API requires every tool response to directly
+    follow its assistant tool_calls message, so pull each one forward.
+    """
+    result = []
+    owner = {}   # tool_call_id -> position of owning assistant message in result
+    placed = {}  # assistant position -> number of its tool responses already placed
+    for msg in messages:
+        tool_call_id = msg.get("tool_call_id")
+        if tool_call_id is not None and tool_call_id in owner:
+            asst_pos = owner.pop(tool_call_id)
+            insert_at = asst_pos + 1 + placed.get(asst_pos, 0)
+            result.insert(insert_at, msg)
+            placed = {k + 1 if k >= insert_at else k: v for k, v in placed.items()}
+            placed[asst_pos] = placed.get(asst_pos, 0) + 1
+            owner = {k: v + 1 if v >= insert_at else v for k, v in owner.items()}
+        else:
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                asst_pos = len(result)
+                for tc in msg["tool_calls"]:
+                    tcid = tc.get("id")
+                    if tcid:
+                        owner[tcid] = asst_pos
+                placed[asst_pos] = 0
+            result.append(msg)
+    return result
+
+
+def validate_message_sequence(messages: List[Dict]) -> List[str]:
+    """Return a list of API-contract violations in the message sequence (empty if valid).
+
+    Checks the two invariants the chat API enforces:
+    - content must be a string or a content-block list
+    - every assistant tool_calls entry must be answered by a tool response
+      (role "tool", or role "user" with tool_call_id for vision outputs) before
+      any other message follows
+    """
+    errors = []
+    pending: List[str] = []
+    for i, msg in enumerate(messages):
+        content = msg.get("content")
+        if content is not None and not isinstance(content, (str, list)):
+            errors.append(f"messages[{i}]: content is {type(content).__name__}, expected str or list")
+
+        tool_call_id = msg.get("tool_call_id")
+        if tool_call_id and msg.get("role") in ("tool", "user"):
+            if tool_call_id in pending:
+                pending.remove(tool_call_id)
+            else:
+                errors.append(f"messages[{i}]: tool response without matching tool_call")
+            continue
+
+        if pending:
+            errors.append(f"messages[{i}]: {msg.get('role')} message arrived before tool responses to {pending}")
+            pending = []
+
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            pending = [tc.get("id") for tc in msg["tool_calls"]]
+
+    if pending:
+        errors.append(f"unanswered tool_calls at end of history: {pending}")
+    return errors
+
+
 def load_messages(session_id: int) -> List[Dict]:
-    """Load all messages for a given session, ordered by timestamp."""
+    """Load all messages for a given session in insertion order."""
     conn = _get_conn()
     cursor = conn.cursor()
-    
+
+    # Order by id, not timestamp: timestamps can tie (same-second inserts),
+    # which makes the ordering of tool_calls vs tool responses nondeterministic.
     cursor.execute("""
         SELECT role, content, tool_calls, tool_call_id
         FROM messages
         WHERE session_id = ?
-        ORDER BY timestamp ASC
+        ORDER BY id ASC
     """, (session_id,))
     
     messages = []
     for row in cursor.fetchall():
         content_str = str(row[1]) if row[1] is not None else ""
+        content = content_str
         try:
             parsed = json.loads(content_str)
-            if isinstance(parsed, (list, dict)):
+            # Only restore structured content for vision-style content-block
+            # lists (e.g. [{"type": "text", ...}, {"type": "image_url", ...}]).
+            # Any other JSON value (a tool result that happens to be valid JSON,
+            # like a package.json dump) must stay a plain string, or the API
+            # rejects it with "content should be a string or a list".
+            if (isinstance(parsed, list) and parsed
+                    and all(isinstance(item, dict) and "type" in item for item in parsed)):
                 content = parsed
-            else:
-                content = content_str
         except (json.JSONDecodeError, TypeError):
-            content = content_str
+            pass
 
         message = {
             "role": str(row[0]) if row[0] is not None else "user",
@@ -538,9 +613,9 @@ def load_messages(session_id: int) -> List[Dict]:
             continue
         
         messages.append(message)
-    
+
     conn.close()
-    return messages
+    return repair_message_sequence(messages)
 
 
 def delete_chat(chat_id: int):

@@ -1,6 +1,4 @@
 import os
-import glob
-import sys
 import json
 import shutil
 import platform
@@ -13,7 +11,7 @@ from rich.markdown import Markdown
 from .config import load_roles, load_tools, load_keys
 from .tools import ToolRegistry
 from .command import CommandRegistry
-from .chat_history_db import init_db, get_or_create_session, load_messages, save_message, update_chat_title, generate_title, get_active_todo_list, get_todo_tasks, create_session, set_redirect_session_id, save_handover, get_old_session_ids, is_subagent_session, get_session_effort, get_session_info, resolve_session_id, migrate_todo_lists
+from .chat_history_db import init_db, get_or_create_session, load_messages, save_message, update_chat_title, generate_title, get_active_todo_list, get_todo_tasks, create_session, set_redirect_session_id, save_handover, get_old_session_ids, is_subagent_session, get_session_effort, get_session_info, resolve_session_id, migrate_todo_lists, repair_message_sequence
 from .git_manager import GitManager
 from skills import SkillManager
 from indexing.code_index_sdk import CodeIndexSDK
@@ -99,84 +97,13 @@ class Agent:
         # Initialize git manager for commit/undo/redo operations
         self.git_manager = GitManager(root_dir=os.getcwd())
 
-        # Check if this looks like a project directory before indexing
-        cwd = os.getcwd()
-        project_markers = [
-            # VCS
-            ".git", ".hg", ".svn",
-            # Python
-            "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt",
-            "Pipfile", "poetry.lock", "uv.lock", "tox.ini", "MANIFEST.in",
-            # JavaScript / TypeScript
-            "package.json", "tsconfig.json", "yarn.lock", "pnpm-lock.yaml",
-            "package-lock.json", "bower.json", ".npmrc", "deno.json",
-            # Go
-            "go.mod", "go.sum", "go.work",
-            # Rust
-            "Cargo.toml",
-            # C / C++
-            "CMakeLists.txt", "Makefile", "Makefile.am", "configure.ac",
-            "meson.build", "BUCK", "BUILD", "BUILD.bazel", "WORKSPACE",
-            # C# / .NET
-            "Directory.Build.props", "global.json",
-            # Java / Kotlin
-            "pom.xml", "build.gradle", "build.gradle.kts",
-            "settings.gradle", "settings.gradle.kts", "gradle.properties",
-            # PHP
-            "composer.json", "artisan",
-            # Ruby
-            "Gemfile", "Rakefile", ".rspec",
-            # Elixir
-            "mix.exs",
-            # Zig
-            "build.zig",
-            # Dart / Flutter
-            "pubspec.yaml",
-            # Lua
-            "rockspec",
-            # Generic / editor
-            ".raggie", ".vscode", ".idea", ".editorconfig",
-        ]
-        is_project = any(os.path.exists(os.path.join(cwd, m)) for m in project_markers)
-        if not is_project:
-            is_project = bool(glob.glob(os.path.join(cwd, "*.csproj")) or glob.glob(os.path.join(cwd, "*.sln")))
-
-        if is_project:
-            try:
-                with self.console.status("[bold green]Indexing codebase...", spinner="dots"):
-                    self.code_indexer.index_directory()
-            except (KeyboardInterrupt, EOFError):
-                self.console.print("\n[yellow]Indexing interrupted. Using existing index.[/yellow]")
-                self.code_indexer._connect()
-        elif self.is_subagent:
-            self.console.print(
-                f"[yellow]Warning:[/yellow] '{cwd}' doesn't look like a project directory. "
-                f"Skipping indexing."
-            )
-        else:
-            self.console.print(
-                f"[yellow]Warning:[/yellow] '{cwd}' doesn't look like a project directory "
-                f"(no .git, pyproject.toml, package.json, go.mod, Cargo.toml, etc. found).\n"
-                f"Indexing here may scan unrelated files and take a long time."
-            )
-            try:
-                response = input("\nIndex anyway? (y/N): ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                response = "n"
-
-            if response in ("y", "yes"):
-                try:
-                    with self.console.status("[bold green]Indexing codebase...", spinner="dots"):
-                        self.code_indexer.index_directory()
-                except (KeyboardInterrupt, EOFError):
-                    self.console.print("\n[yellow]Indexing interrupted. Using existing index.[/yellow]")
-                    self.code_indexer._connect()
-            else:
-                self.console.print(
-                    "Please cd into your project directory and try again.\n"
-                    "To start a new project: raggie code <project-name>"
-                )
-                sys.exit(0)
+        # Index the codebase at the start of each conversation
+        try:
+            with self.console.status("[bold green]Indexing codebase...", spinner="dots"):
+                self.code_indexer.index_directory()
+        except (KeyboardInterrupt, EOFError):
+            self.console.print("\n[yellow]Indexing interrupted. Using existing index.[/yellow]")
+            self.code_indexer._connect()
 
         # Display previous chat history if it exists (skip for subagents — they
         # share the chat_id but don't need the parent's conversation printed)
@@ -378,11 +305,37 @@ class Agent:
             "content": message,
         }
 
+    @staticmethod
+    def _normalize_message_content(msg):
+        """Ensure message content is a string or content-block list, as the API requires."""
+        content = msg.get("content")
+        if content is not None and not isinstance(content, (str, list)):
+            msg["content"] = json.dumps(content)
+
+    def _create_completion(self, **kwargs):
+        """Single choke point for chat.completions.create.
+
+        Repairs the tool_call/tool-response sequence and normalizes content on
+        the in-memory history right before sending, so the API never receives
+        an invalid conversation regardless of how the history was produced.
+        """
+        self.chat_history = repair_message_sequence(self.chat_history)
+        for msg in self.chat_history:
+            self._normalize_message_content(msg)
+        kwargs["messages"] = self.chat_history
+        return self.client.chat.completions.create(**kwargs)
+
 
 
     def _has_dangling_tool_work(self):
         if not self.chat_history:
             return False
+
+        # An assistant tool_calls message with missing responses anywhere in the
+        # history (not just at the tail — a crash can be followed by stored user
+        # messages) makes the sequence invalid for the API.
+        if self._get_pending_toolcalls():
+            return True
 
         last_msg = self.chat_history[-1]
         if last_msg.get("role") == "tool":
@@ -392,7 +345,7 @@ class Agent:
         if last_msg.get("role") == "user" and last_msg.get("tool_call_id"):
             return True
 
-        return last_msg.get("role") == "assistant" and bool(last_msg.get("tool_calls"))
+        return False
 
     def _get_pending_toolcalls(self):
         """Find tool calls from the last assistant message that don't have tool responses yet.
@@ -438,6 +391,9 @@ class Agent:
             tool_output = self.tool_registry.call(
                 tool_name, args_dict, toolcall_id, self.session_id
             )
+            # A tool returning non-string content (e.g. a dict) would make the
+            # next API call fail; normalize before it enters the history.
+            self._normalize_message_content(tool_output)
 
             if self.debug:
                 print(f"\n[DEBUG] Tool output for {tool_name}:")
@@ -479,24 +435,20 @@ class Agent:
         if not self._has_dangling_tool_work():
             return
 
-        last_msg = self.chat_history[-1]
-        if last_msg.get("role") == "assistant" and last_msg.get("tool_calls"):
-            for toolcall in last_msg["tool_calls"]:
-                function = toolcall.get("function", {})
-                yield from self._execute_tool_call(
-                    toolcall.get("id"),
-                    function.get("name"),
-                    function.get("arguments", "{}"),
-                )
-        elif last_msg.get("tool_call_id"):
-            pending = self._get_pending_toolcalls()
-            for toolcall in pending:
-                function = toolcall.get("function", {})
-                yield from self._execute_tool_call(
-                    toolcall.get("id"),
-                    function.get("name"),
-                    function.get("arguments", "{}"),
-                )
+        # Re-execute every tool call that never got a response, wherever the
+        # dangling assistant message sits in the history.
+        for toolcall in self._get_pending_toolcalls():
+            function = toolcall.get("function", {})
+            yield from self._execute_tool_call(
+                toolcall.get("id"),
+                function.get("name"),
+                function.get("arguments", "{}"),
+            )
+
+        # Executed tool responses are appended to the end of the history; pull
+        # them up next to their assistant message so the sequence sent to the
+        # API stays valid.
+        self.chat_history = repair_message_sequence(self.chat_history)
 
         yield from self.start()
 
@@ -530,9 +482,8 @@ class Agent:
         tool_calls_accum = []
 
         try:
-            stream = self.client.chat.completions.create(
+            stream = self._create_completion(
                 model=model,
-                messages=self.chat_history,
                 tools=self._get_tools(self.agent_role),
                 stream=True,
                 stream_options={"include_usage": True},
@@ -595,9 +546,8 @@ class Agent:
 
         try:
             with self.console.status("[bold green]Thinking...", spinner="dots"):
-                chat = self.client.chat.completions.create(
+                chat = self._create_completion(
                     model=model,
-                    messages=self.chat_history,
                     tools=self._get_tools(self.agent_role),
                 )
         except Exception as err:
@@ -652,9 +602,8 @@ class Agent:
         self._handover_text = None
         handover_text = ""
         try:
-            stream = self.client.chat.completions.create(
+            stream = self._create_completion(
                 model=model,
-                messages=self.chat_history,
                 stream=True,
             )
             for chunk in stream:
@@ -687,9 +636,8 @@ class Agent:
         self._handover_text = None
         try:
             with self.console.status("[bold green]Generating handover instructions...", spinner="dots"):
-                chat = self.client.chat.completions.create(
+                chat = self._create_completion(
                     model=model,
-                    messages=self.chat_history,
                 )
         except Exception as err:
             self.chat_history.pop()

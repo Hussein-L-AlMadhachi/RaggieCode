@@ -1,6 +1,6 @@
 # Raggie Code 
 
-> *Raggie Code v0.2.1 (beta)*
+> *Raggie Code v0.2.2*
 
 <p style="padding:30px 50px;">
   <img src="Raggie.png" alt="Raggie" width="312">
@@ -30,14 +30,14 @@ Give Raggie a complex task like "migrate the database from SQLite to PostgreSQL"
 
 ### Almost never loses context
 
-When the LLM's context window fills up mid-task, Raggie doesn't just truncate and hope. It performs an **automatic session handover**: the agent generates a detailed handover document covering the original goal, current state, decisions made, changes applied, test results, errors encountered, and the exact next step. then spins up a fresh session that picks up the work seamlessly. You can also resume interrupted todo lists and converations across sessions.
+When the LLM's context window fills up mid-task, Raggie doesn't just truncate and hope. It performs an **automatic session handover**: the agent generates a detailed handover document covering the original goal, current state, decisions made, changes applied, test results, errors encountered, and the exact next step. then spins up a fresh session that picks up the work seamlessly. You can also resume interrupted todo lists and conversations across sessions. Even if the process dies mid-tool-call, the next startup detects unanswered tool calls, re-executes them (subagent tasks resume their existing child session instead of starting over), and repairs the history before it is sent back to the API.
 
 ### It's safe by design
 
 - **Built-in git repo**: Every change is committed to `.raggie/git/`. Type `/undo` to undo instantly, `/redo` to re-apply.
 - **`.gitignore` / `.aiignore` respected**: The agent can't read, write, or modify ignored files. If a `.aiignore` file exists, it's used instead of `.gitignore` for both file access and code indexing.
 - **Human-in-the-loop**: The `AskUser` tool lets the agent ask you questions mid-task. Todo list plans require your approval before execution.
-- **Crash recovery**: Undo/redo operations use marker files for crash safety. Interrupted todo lists are detected and offered for resumption on next startup.
+- **Crash recovery**: Undo/redo operations use marker files for crash safety. Interrupted todo lists are detected and offered for resumption on next startup. Chat history is validated and repaired on load and again before every API call (tool-call/tool-response pairing, message ordering, content types), so interrupted or corrupted sessions resume cleanly instead of failing with API errors.
 
 ### It gets smarter over time
 
@@ -46,7 +46,7 @@ Raggie's **skills system** lets it learn and persist knowledge across sessions. 
 ### It works with your stack
 
 - **Any OpenAI-compatible LLM**: OpenAI, DeepSeek, OpenRouter, Ollama, vLLM, LocalAI. if it speaks the OpenAI API, Raggie works with it.
-- **31 tools**: Code exploration, file operations, shell execution (including background processes), web search, web fetch, and more.
+- **32 tools**: Code exploration, file operations, shell execution (including background processes), web search, web fetch, image reading for vision models, and more.
 - **Project-specific customization**: Drop an `AGENTS.md` in your project root and the agent picks up your conventions automatically.
 - **Role-based configuration**: Define multiple agent roles with different models, tools, and system prompts.
 
@@ -69,11 +69,12 @@ Every tool call is displayed in real time with its arguments. Debug mode (`--deb
 | **Skills system** | Persistent, on-demand instruction sets that the agent advertises and fetches as needed |
 | **Built-in git versioning** | Every change committed automatically. `/undo` to undo, `/redo` to redo. Full diff and log introspection |
 | **Human-in-the-loop** | `AskUser` tool for mid-task questions. Todo list approval gates. `SetSkill` requires user consent |
-| **31 tools** | Code exploration, file I/O, shell (foreground + background), web search/fetch, and more |
+| **32 tools** | Code exploration, file I/O, shell (foreground + background), web search/fetch, image reading for vision models, and more |
 | **`.gitignore` / `.aiignore` enforcement** | Ignored files are invisible to the agent. can't read, write, modify, or index them. Use `.aiignore` to control this independently of git |
 | **15 languages** | Python, Go, C#, JavaScript, TypeScript, TSX, Rust, Zig, Elixir, C, C++, PHP, Dart, Java, Kotlin |
 | **Any OpenAI-compatible LLM** | Works with OpenAI, DeepSeek, OpenRouter, Ollama, vLLM, LocalAI, and anything else that speaks the OpenAI API |
-| **Persistent chat history** | SQLite-backed sessions, messages, skills, and todo lists. all survive across restarts |
+| **Persistent chat history** | SQLite-backed sessions, messages, skills, and todo lists. all survive across restarts. Crashed sessions resume with unanswered tool calls re-executed and history validated/repaired before any API call |
+| **File references in prompts** | Type `@path/to/file.py:10-25` in your prompt and the referenced lines are expanded inline. ships with a VSCode extension that copies selections in this format |
 | **Project customization** | `AGENTS.md` for project conventions, `roles.json` for model/tool configuration, skills for persistent instructions |
 | **Effort levels** | Control how deep the agent can nest subagents. 5 levels: Zen (depth 1), Serious (2), Extreme (4), Feral (8), Insane (16). Change mid-session with `/effort` |
 | **Background shell execution** | Run long-running commands (dev servers, watchers) non-blocking with PID tracking and kill support |
@@ -86,6 +87,7 @@ Every tool call is displayed in real time with its arguments. Debug mode (`--deb
 
 - [Installation](#installation)
 - [Quick Start](#quick-start)
+- [File References in Prompts](#file-references-in-prompts)
 - [Commands Reference](#commands-reference)
 - [In-Chat Commands](#in-chat-commands)
 - [Effort Levels](#effort-levels)
@@ -174,17 +176,34 @@ In interactive mode:
 
 After the agent makes changes, type `/undo` as your next prompt to undo the last commit. Type `/redo` to re-apply it.
 
+### 4. Reference exact code in your prompt
+
+Type `@path/to/file.py:10-25` (or a single line like `@path/to/file.py:10`) anywhere in your prompt and Raggie expands it inline with the referenced lines before sending it to the LLM:
+
+```
+You:
+> fix the off-by-one in @src/app.py:48-52
+```
+
+Rules of thumb:
+- Paths are relative to the project directory. Missing files and email addresses like `user@example.com` are left untouched.
+- Reversed ranges (`:5-3`) are normalized, and ranges past end-of-file are clamped.
+- The same reference used twice is only expanded once.
+
+A companion **VSCode extension** (`vscode-extension/` in this repo, "Raggie Code Tools") adds a right-click "Copy Reference for Raggie Code" command that copies the current selection as `@path/to/file:23-43`, ready to paste into the chat.
+
 ### See it in action
 
 ```bash
 $ raggie code .
 
-Raggie Agent (code) v1.0.0 - Interactive Mode
-Press Esc followed by Enter to send message, or type 'exit' to quit
+Raggie Agent (code) v0.2.2 - Interactive Mode
 --------------------------------------------------
 Indexing codebase...
 
 Effort: Zen - to change it use /effort
+
+Press Esc followed by Enter to send message, or type 'exit' to quit
 
 You:
 > Add input validation to the login endpoint and update all callers
@@ -355,26 +374,32 @@ These commands are available inside the interactive chat loop. They are intercep
 
 ```
 raggie/
-├── raggie.py                  # Entry point. parses args (role + project-dir), runs agent loop
 ├── src/
+│   ├── raggie.py              # Entry point. parses args (role + project-dir), runs agent loop
 │   ├── cli.py                 # Argument parser (argparse)
+│   ├── interactive.py         # Interactive chat loop + @path:lines file reference expansion
 │   ├── chat.py                # Watermelon-themed status messages (flavor)
 │   ├── config/                # Default configuration files
 │   │   ├── roles.json         # Agent role definitions
 │   │   ├── tools.json         # Tool definitions for LLM function calling
 │   │   └── coder_system_prompt.md  # System prompt for the code role
 │   ├── Agent/
-│   │   ├── agent.py           # Core Agent class. prompt loop, tool execution, commit
+│   │   ├── agent.py           # Core Agent class. prompt loop, tool execution, history validation, commit
 │   │   ├── config.py          # Config loader. reads from ~/.config/raggie/
 │   │   ├── tools.py           # ToolRegistry. maps tool names to handler functions
-│   │   ├── chat_history_db.py # SQLite DB. sessions, messages, skills, todo lists
+│   │   ├── chat_history_db.py # SQLite DB. sessions, messages, skills, todo lists + history repair/validation
+│   │   ├── effort_levels.py   # Effort tiers controlling max subagent depth
 │   │   └── git_manager.py     # Local git repo in .raggie/git/ for versioning
 │   ├── Tools/
 │   │   ├── __init__.py        # Registers all tool handlers with the registry
 │   │   ├── read.py            # WholeFileContentDump
 │   │   ├── write.py           # WriteFile
 │   │   ├── replace.py         # ReplaceText
+│   │   ├── edit_symbol.py     # EditSymbol (replace a symbol's implementation by name)
 │   │   ├── remove.py          # RemoveFile
+│   │   ├── read_image.py      # ReadImage (vision input)
+│   │   ├── document.py        # Document (persisted symbol descriptions)
+│   │   ├── ask_user.py        # AskUser (human-in-the-loop questions)
 │   │   ├── shell.py           # Shell command execution
 │   │   ├── temp_background_service.py # TempBackgroundService. temporary background services
 │   │   ├── shell_kill.py      # ShellKill. kill background processes
@@ -383,7 +408,7 @@ raggie/
 │   │   ├── web_fetch.py       # WebFetch
 │   │   ├── web_search.py      # WebSearch
 │   │   ├── view_changes.py    # ViewChanges (git status/diff/log)
-│   │   ├── dispatch_subagent.py  # DispatchSubagent. spawns child agents
+│   │   ├── dispatch_subagent.py  # DispatchSubagent. spawns child agents (crash-safe resume)
 │   │   ├── todo_list.py       # Todo list CRUD + execution
 │   │   ├── GetSymbolSourceCode.py  # GetSymbolSourceCode
 │   │   ├── GetFileCodeStructure.py  # GetFileCodeSemantics
@@ -394,7 +419,8 @@ raggie/
 │   │   ├── code_indexer.py    # Tree-sitter based code indexer
 │   │   ├── code_index_sdk.py  # SDK for querying the code index
 │   │   ├── file_utils.py      # File walking utilities
-│   │   ├── extracts.py        # Symbol extraction per language
+│   │   ├── extractors.py      # Symbol extraction per language
+│   │   ├── frontend/          # HTML/CSS/JSX/TSX indexing (components, styles, bindings)
 │   │   ├── language_config.py # Language parser configurations
 │   │   ├── models.py          # Data models (Symbol, Function, Class, etc.)
 │   │   ├── db_schema.py       # SQLite schema for the code index
@@ -404,11 +430,13 @@ raggie/
 │   │   └── export_to_json.py  # Export index to JSON
 │   ├── RAG/
 │   │   ├── find.py            # Find symbols in the index
-│   │   └── graph.py           # Dependency graph traversal
+│   │   ├── graph.py           # Dependency graph traversal
+│   │   └── document.py        # Symbol description storage
 │   └── skills/
 │       ├── __init__.py        # Exports SkillManager
 │       ├── manager.py         # SkillManager. CRUD for named skills (role + name)
 │       └── tool.py            # SetSkill + GetSkill tool handlers
+├── vscode-extension/          # VSCode extension: copy selection as @path:lines reference
 ├── AGENTS.md                  # Project-specific overrides (auto-loaded)
 ├── pyproject.toml             # Package metadata + dependencies
 ├── .raggie/
@@ -420,7 +448,7 @@ raggie/
 
 ### How the Agent Works
 
-1. **Startup**: The agent loads its role config, connects to the LLM API, checks for project markers in the working directory, indexes your codebase (tree-sitter, multiprocessing) if it looks like a project, and initialises its local git repo.
+1. **Startup**: The agent loads its role config, connects to the LLM API, indexes your codebase (tree-sitter, multiprocessing), and initialises its local git repo. Before the agent is created, the CLI entry point checks for a `.raggie` folder in the working directory and prompts the user if none is found.
 2. **Prompt loop**: User sends a message → agent calls the LLM with full chat history + tool definitions → LLM responds with text and/or tool calls.
 3. **Tool execution**: Each tool call is dispatched to a registered handler. Results are fed back to the LLM as tool responses.
 4. **Re-indexing**: After each tool call, the code index is updated so the agent always has fresh context.
@@ -450,7 +478,7 @@ Defines agent roles. Each role has a model, base URL, tools list, and system pro
 ```json
 {
   "code": {
-    "tools": ["WholeFileContentDump", "Shell", "WriteFile", ...],
+    "tools": ["UglyWholeFileContentDump", "Shell", "WriteFile", ...],
     "model": "deepseek-v4-flash",
     "base_url": "https://api.deepseek.com",
     "system_prompt_file": "coder_system_prompt.md"
@@ -607,7 +635,7 @@ Raggie works with any OpenAI-compatible local LLM server. Below are setup guides
 
 ## Tools Reference
 
-Raggie provides 31 tools to the LLM. Here they are grouped by category:
+Raggie provides 32 tools to the LLM. Here they are grouped by category:
 
 ### Code Exploration
 
@@ -618,7 +646,8 @@ this part is powered by the code indexer (code analysis and dependency tracking 
 | `GetFileCodeSemantics` | Show a file's structure: functions, classes, imports, dependencies, with optional full source bodies |
 | `GetSymbolSourceCode` | Get full source of a function/class/variable by name with fuzzy search fallback |
 | `WalkCallTree` | BFS traversal of the call graph from any entry point (up to depth 5, cycle detection) |
-| `WholeFileContentDump` | Read raw file contents (throttled. prefer semantic tools first) |
+| `UglyWholeFileContentDump` | Read raw file contents (heavily throttled. prefer semantic tools first) |
+| `Document` | Read or update persisted descriptions for symbols in the code index (experimental) |
 | `ListDir` | List directory contents with type and size |
 | `SearchAllFilesContent` | Regex grep across files/directories |
 | `FileNameSearch` | Fuzzy search for file names by partial or approximate match (top 5 results) |
@@ -629,6 +658,7 @@ this part is powered by the code indexer (code analysis and dependency tracking 
 |---|---|
 | `WriteFile` | Create or overwrite a file (auto-creates dirs, respects .gitignore) |
 | `ReplaceText` | Find-and-replace in an existing file (literal or regex, supports replace_all) |
+| `EditSymbol` | Replace the entire implementation of a function/method/class (or frontend entity) by name. returns a diff view |
 | `RemoveFile` | Delete a file or directory (refuses gitignored paths) |
 | `Shell` | Execute a shell command (for build, test, etc.) |
 | `TempBackgroundService` | Start a temporary background service (non-blocking, returns PID) |
@@ -640,12 +670,13 @@ this part is powered by the code indexer (code analysis and dependency tracking 
 |---|---|
 | `WebFetch` | Fetch a URL and return readable text (HTML stripped, configurable max chars) |
 | `WebSearch` | Search the web via DuckDuckGo (up to 20 results, optional region) |
+| `ReadImage` | Read an image file as vision input for the model (PNG, JPG, GIF, BMP, WEBP, SVG, TIFF, ICO, HEIC, HEIF) |
 
 ### Agent Management & Communication
 
 | Tool | What it does |
 |---|---|
-| `DispatchSubagent` | Spawn a child agent to handle a subtask (max 3 levels deep, optional timeout) |
+| `DispatchSubagent` | Spawn a child agent to handle a subtask (nesting depth limited by the session's effort level) |
 | `SetSkill` | Create/update a named skill for the agent's own role (requires user consent) |
 | `GetSkill` | Fetch the full content of a skill by role and name |
 | `ViewChanges` | Show git status, diff, or log from `.raggie/git/` |
@@ -739,7 +770,7 @@ The todo list system lets the agent plan and execute complex multi-step tasks wi
 - **Subagent isolation**: Each task is handled by a fresh subagent that receives context from completed tasks
 - **Auto-deletion**: When all tasks are done, the todo list is automatically removed from the database
 - **Crash recovery**: If the session is interrupted, `GetActiveTodoList` returns the incomplete list and the user is offered to resume it
-- **Nested todo lists**: Subagents can create their own todo lists for complex subtasks (up to 3 levels deep)
+- **Nested todo lists**: Subagents can create their own todo lists for complex subtasks (nesting depth limited by the session's effort level)
 
 ---
 
@@ -778,11 +809,12 @@ Languages are gracefully skipped if their tree-sitter grammar is not installed.
 
 ### Project directory detection
 
-Before indexing, Raggie checks whether the current directory looks like a code project by looking for project marker files (`.git`, `pyproject.toml`, `package.json`, `go.mod`, `Cargo.toml`, `Makefile`, `pom.xml`, `build.gradle`, `composer.json`, `Gemfile`, `mix.exs`, `build.zig`, `pubspec.yaml`, `.raggie`, `.vscode`, `.idea`, `.editorconfig`, and many more).
+Before indexing, Raggie checks whether a `.raggie` folder exists in the current directory. This folder is created by Raggie on first run, so its presence means the user has already confirmed this is a project directory.
 
-- **If project markers are found**: indexing proceeds automatically as normal.
-- **If no project markers are found**: Raggie warns that the directory doesn't look like a project and asks whether to index anyway. This prevents accidentally scanning unrelated files (e.g. if you run `raggie code .` in your home directory). If you decline, Raggie exits and suggests you `cd` into your project directory or start a new one with `raggie code <project-name>`.
-- **Subagent sessions**: indexing is skipped silently (subagents can't prompt interactively).
+- **`.raggie` exists**: indexing proceeds automatically as normal.
+- **No `.raggie` folder, but directory has no subdirectories**: indexing proceeds without prompting — a flat directory is small enough to be safe.
+- **No `.raggie` folder, directory has subdirectories**: Raggie warns that the directory doesn't look like a project and asks whether to index anyway. This prevents accidentally scanning unrelated files (e.g. if you run `raggie code .` in your home directory). If you decline, Raggie exits and suggests you `cd` into your project directory or start a new one with `raggie code <project-name>`.
+- **Subagent sessions**: subagents inherit the parent's `.raggie` folder (same working directory), so they always index normally.
 
 You can manually trigger re-indexing at any time with the `/reindex` command.
 
@@ -888,7 +920,7 @@ Yes. Create a `AGENTS.md` file in your project root with custom instructions. Ed
 
 ### What happens if I interrupt the agent mid-task?
 
-Todo lists are persisted in the database. When you restart, the agent checks for incomplete todo lists and offers to resume them. The git repo also has the last committed state for recovery.
+Todo lists are persisted in the database. When you restart, the agent checks for incomplete todo lists and offers to resume them. If the process died mid-tool-call, the unanswered tool calls are detected and re-executed on resume (subagent dispatches and todo tasks resume their existing child sessions rather than starting over), and the chat history is validated and repaired before it is sent to the API. so a hard quit never corrupts a session. The git repo also has the last committed state for recovery.
 
 ### What happens when the context window fills up?
 
