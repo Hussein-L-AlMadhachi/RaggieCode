@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from indexing.code_index_sdk import CodeIndexSDK
+from raggie_dirs import get_code_index_db_path
 
 
 def explore_code_structure(file_path: str, include_bodies: bool = False) -> str:
@@ -15,7 +16,7 @@ def explore_code_structure(file_path: str, include_bodies: bool = False) -> str:
         YAML-like formatted string showing the dependency graph, optionally with symbol bodies.
         For frontend files (HTML, CSS, JSX, TSX), returns structured semantic output instead.
     """
-    db_path = Path.cwd() / ".raggie" / ".code_index.raggie"
+    db_path = get_code_index_db_path()
 
     if not db_path.exists():
         return f"Error: Code index database not found at {db_path}"
@@ -26,11 +27,10 @@ def explore_code_structure(file_path: str, include_bodies: bool = False) -> str:
             from indexing.frontend.semantic_output import format_file_semantics
             semantic = format_file_semantics(sdk.conn, file_path)
             if semantic is not None:
-                # Frontend file — return semantic output
+                # Frontend file   return semantic output
                 if include_bodies:
                     # Append raw source when bodies are explicitly requested
-                    normalized = file_path[2:] if file_path.startswith('./') else file_path
-                    file = sdk.get_file_by_path(normalized)
+                    file, _ = sdk.resolve_file(file_path)
                     if file:
                         raw = sdk._read_source_lines(file.id, 1, 0) if hasattr(sdk, '_read_source_lines') else ""
                         if raw:
@@ -43,17 +43,7 @@ def explore_code_structure(file_path: str, include_bodies: bool = False) -> str:
                 return graph
 
             # Get the file to fetch all symbols
-            file = sdk.get_file_by_path(file_path)
-            if not file:
-                # Fallback: try matching by filename (same logic as get_dependency_graph)
-                from pathlib import Path as _Path
-                filename = _Path(file_path[2:] if file_path.startswith('./') else file_path).name
-                cursor = sdk.conn.cursor()
-                cursor.execute("SELECT * FROM files WHERE path LIKE ?", (f"%{filename}",))
-                row = cursor.fetchone()
-                if row:
-                    from indexing.models import File
-                    file = File.from_row(row)
+            file, _ = sdk.resolve_file(file_path)
             if not file:
                 return graph
 
@@ -100,7 +90,7 @@ def walk_call_tree(symbol_name: str, file_path: str = None,
     Returns:
         JSON lines string, one object per node, sorted by depth then name.
     """
-    db_path = Path.cwd() / ".raggie" / ".code_index.raggie"
+    db_path = get_code_index_db_path()
 
     if not db_path.exists():
         return json.dumps({"error": f"Code index database not found at {db_path}"})
@@ -121,24 +111,17 @@ def explore_frontend_structure(file_path: str) -> str:
     Returns:
         JSON string with component info, markup trees, events, bindings, and styles.
     """
-    db_path = Path.cwd() / ".raggie" / ".code_index.raggie"
+    db_path = get_code_index_db_path()
 
     if not db_path.exists():
         return json.dumps({"error": f"Code index database not found at {db_path}"})
 
     try:
         with CodeIndexSDK(str(db_path)) as sdk:
-            file = sdk.get_file_by_path(file_path)
+            file, candidates = sdk.resolve_file(file_path)
             if not file:
-                from pathlib import Path as _Path
-                filename = _Path(file_path[2:] if file_path.startswith('./') else file_path).name
-                cursor = sdk.conn.cursor()
-                cursor.execute("SELECT * FROM files WHERE path LIKE ?", (f"%{filename}",))
-                row = cursor.fetchone()
-                if row:
-                    from indexing.models import File
-                    file = File.from_row(row)
-            if not file:
+                if candidates:
+                    return json.dumps({"error": f"Ambiguous file path '{file_path}': matches {candidates}"})
                 return json.dumps({"error": f"File not found: {file_path}"})
 
             cursor = sdk.conn.cursor()
@@ -194,7 +177,7 @@ def walk_render_tree(component_name: str, file_path: str = None,
     Returns:
         JSON string with the render tree (children direction).
     """
-    db_path = Path.cwd() / ".raggie" / ".code_index.raggie"
+    db_path = get_code_index_db_path()
 
     if not db_path.exists():
         return json.dumps({"error": f"Code index database not found at {db_path}"})
@@ -204,7 +187,7 @@ def walk_render_tree(component_name: str, file_path: str = None,
             cursor = sdk.conn.cursor()
 
             if file_path:
-                file = sdk.get_file_by_path(file_path)
+                file, _ = sdk.resolve_file(file_path)
                 if file:
                     cursor.execute(
                         "SELECT id FROM frontend_components WHERE name = ? AND file_id = ? LIMIT 1",

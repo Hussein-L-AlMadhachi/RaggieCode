@@ -117,32 +117,32 @@ Defines the `LANGUAGE_CONFIG` dictionary that maps each language to:
 - **`node_types`**: dictionary mapping symbol categories to tree-sitter node type names
 
 **Node type categories:**
-- `function` — function/method definition node types
-- `class` — class definition node types (or `None` if language has no classes)
-- `assignment` — variable assignment/declaration node types
-- `type_alias` — type alias definition node types (or `None`)
-- `struct` — struct definition node types (Go, Rust, C, C++)
-- `interface` — interface/trait definition node types
-- `enum` — enum definition node types
-- `method` — method-specific node types (distinct from functions)
-- `public_field` — class field/property node types (C#, TypeScript)
+- `function`   function/method definition node types
+- `class`   class definition node types (or `None` if language has no classes)
+- `assignment`   variable assignment/declaration node types
+- `type_alias`   type alias definition node types (or `None`)
+- `struct`   struct definition node types (Go, Rust, C, C++)
+- `interface`   interface/trait definition node types
+- `enum`   enum definition node types
+- `method`   method-specific node types (distinct from functions)
+- `public_field`   class field/property node types (C#, TypeScript)
 
 **Utility functions:**
-- `get_language_for_extension(ext)` — returns language name or `None`
-- `get_extensions_for_languages(languages)` — returns set of extensions
-- `is_language_available(language)` — checks if grammar is installed
-- `get_available_languages()` — lists all languages with installed grammars
-- `get_node_types(language)` — returns the node_types dict for a language
+- `get_language_for_extension(ext)`   returns language name or `None`
+- `get_extensions_for_languages(languages)`   returns set of extensions
+- `is_language_available(language)`   checks if grammar is installed
+- `get_available_languages()`   lists all languages with installed grammars
+- `get_node_types(language)`   returns the node_types dict for a language
 
 ### `file_utils.py`
 
 File system utilities for the indexer:
 
-- **`detect_language(file_path)`** — maps file extension to language name
-- **`load_ignore_patterns(root_dir)`** — loads `.aiignore` (priority) or `.gitignore` patterns using `pathspec`
-- **`collect_files_to_index(root_dir, languages, exclude_dirs=None)`** — walks the directory tree, filters by extension and ignore patterns, skips `test`/`tests` directories. Also excludes directories from frontend config `generated_dir_exclusions` (e.g. `node_modules`, `dist`, `build`, `.next`). Additional directory names can be passed via `exclude_dirs`.
-- **`read_file_content(file_path)`** — reads file in binary mode for tree-sitter
-- **`get_relative_path(file_path, root_dir)`** — returns relative path string
+- **`detect_language(file_path)`**   maps file extension to language name
+- **`load_ignore_patterns(root_dir)`**   loads `.aiignore` (priority) or `.gitignore` patterns using `pathspec`
+- **`collect_files_to_index(root_dir, languages, exclude_dirs=None)`**   walks the directory tree, filters by extension and ignore patterns, skips `test`/`tests` directories. Also excludes directories from frontend config `generated_dir_exclusions` (e.g. `node_modules`, `dist`, `build`, `.next`). Additional directory names can be passed via `exclude_dirs`.
+- **`read_file_content(file_path)`**   reads file in binary mode for tree-sitter
+- **`get_relative_path(file_path, root_dir)`**   returns relative path string
 
 ### `parse_worker.py`
 
@@ -150,10 +150,10 @@ The parallel parsing worker. Runs in separate processes via `ProcessPoolExecutor
 
 **Key functions:**
 
-- **`parse_file(args)`** — entry point. Takes `(file_path, root_dir)` or `(file_path, root_dir, frontend_enabled)` tuple, returns a dict with all extracted symbols or `{'error': ...}`.
-- **`_extract_symbols(...)`** — iteratively walks the tree-sitter AST using an explicit stack (avoids recursion limits on deeply nested files like Linux kernel C). Matches node types against `LANGUAGE_CONFIG` and dispatches to extractor functions.
-- **`_process_class_body(...)`** — processes class body children to extract methods, nested classes, and attributes.
-- **`_extract_deps(node, source_code, language, dependencies, func_index)`** — extracts function calls, class references, and variable references from a function node, attaching them to the function at `func_index`.
+- **`parse_file(args)`**   entry point. Takes `(file_path, root_dir)` or `(file_path, root_dir, frontend_enabled)` tuple, returns a dict with all extracted symbols or `{'error': ...}`.
+- **`_extract_symbols(...)`**   iteratively walks the tree-sitter AST using an explicit stack (avoids recursion limits on deeply nested files like Linux kernel C). Matches node types against `LANGUAGE_CONFIG` and dispatches to extractor functions.
+- **`_process_class_body(...)`**   processes class body children to extract methods, nested classes, and attributes.
+- **`_extract_deps(node, source_code, language, dependencies, func_index)`**   extracts function calls, class references, and variable references from a function node, attaching them to the function at `func_index`.
 
 **Special handling:**
 - **C# top-level statements**: collected into a pseudo-function named `top_level_statements`
@@ -166,15 +166,15 @@ The parallel parsing worker. Runs in separate processes via `ProcessPoolExecutor
 The largest module (~1100 lines). Contains all tree-sitter node inspection utilities:
 
 **Location and text extraction:**
-- `get_node_location(node)` — returns `{start_line, start_column, end_line, end_column, start_byte, end_byte}` (1-indexed lines)
-- `extract_node_text(node, source_code)` — extracts text using byte offsets (handles UTF-8 correctly)
-- `extract_field_text(node, field_name, source_code)` — extracts text from a named field child
+- `get_node_location(node)`   returns `{start_line, start_column, end_line, end_column, start_byte, end_byte}` (1-indexed lines)
+- `extract_node_text(node, source_code)`   extracts text using byte offsets (handles UTF-8 correctly)
+- `extract_field_text(node, field_name, source_code)`   extracts text from a named field child
 
 **Name extraction:**
-- `extract_name(node, source_code, language)` — language-specific name extraction for functions, classes, structs, enums, etc. Handles `identifier`, `simple_identifier`, `type_identifier`, `field_identifier` across languages.
+- `extract_name(node, source_code, language)`   language-specific name extraction for functions, classes, structs, enums, etc. Handles `identifier`, `simple_identifier`, `type_identifier`, `field_identifier` across languages.
 
 **Variable name extraction:**
-- `extract_variable_name(node, source_code, language)` — extracts the variable name from an assignment/declaration node. Returns `(name, is_attribute)` tuple. Language-specific:
+- `extract_variable_name(node, source_code, language)`   extracts the variable name from an assignment/declaration node. Returns `(name, is_attribute)` tuple. Language-specific:
   - Python: `left` field of `assignment` node
   - JavaScript/TypeScript: `lexical_declaration`/`variable_declaration` → `variable_declarator` → `identifier`
   - Java/Dart: `left` field
@@ -183,18 +183,18 @@ The largest module (~1100 lines). Contains all tree-sitter node inspection utili
   - Elixir: `binary_operator` with `=` operator → `left` field → `identifier`
 
 **Other extraction utilities:**
-- `extract_parameters(node, source_code, language)` — extracts parameter list
-- `extract_return_type(node, source_code)` — extracts return type annotation
-- `extract_base_classes(node, source_code, language)` — extracts base/parent class names
-- `extract_docstring(node, source_code, language)` — extracts docstrings (Python, Go, JavaScript, Rust)
-- `is_method(node, language, class_node_type)` — determines if a function is a method
-- `count_branches(node, language, source_code)` — counts conditional branches (if/for/while/switch/try etc.) with language-specific node type mappings
-- `extract_go_receiver(node, source_code)` — extracts Go method receiver type
-- `extract_go_type_name(node, source_code)` — extracts type name from Go `type_declaration` nodes
-- `extract_go_type_kind(node, source_code)` — determines if a Go `type_declaration` is a struct or interface
+- `extract_parameters(node, source_code, language)`   extracts parameter list
+- `extract_return_type(node, source_code)`   extracts return type annotation
+- `extract_base_classes(node, source_code, language)`   extracts base/parent class names
+- `extract_docstring(node, source_code, language)`   extracts docstrings (Python, Go, JavaScript, Rust)
+- `is_method(node, language, class_node_type)`   determines if a function is a method
+- `count_branches(node, language, source_code)`   weighted branch count for a function body (iterative, no recursion). Each branching construct contributes its nesting depth to the total. The variable `NESTING_WEIGHT_MODE` controls the weighting: `"linear"` (depth, default), `"flat"` (1 per branch), `"sqrt"` (square root of depth), or `"quadratic"` (depth squared). Also supports `count_macro_branches(node, language, source_code)` for C/C++ preprocessor macros and Rust `macro_rules!` entries.
+- `extract_go_receiver(node, source_code)`   extracts Go method receiver type
+- `extract_go_type_name(node, source_code)`   extracts type name from Go `type_declaration` nodes
+- `extract_go_type_kind(node, source_code)`   determines if a Go `type_declaration` is a struct or interface
 
 **Import extraction:**
-- `extract_imports(node, source_code, language, root_dir)` — iteratively finds import nodes. Language-specific import node types:
+- `extract_imports(node, source_code, language, root_dir)`   iteratively finds import nodes. Language-specific import node types:
   - Python: `import_statement`, `import_from_statement`
   - Go: `import_declaration`
   - JavaScript/TypeScript/TSX: `import_statement`, `import_declaration`
@@ -209,7 +209,7 @@ The largest module (~1100 lines). Contains all tree-sitter node inspection utili
   - Kotlin: `import_header`
 
 **External vs. internal import detection:**
-- `_is_external_import(import_text, language, root_path)` — determines if an import is external (third-party) or internal (project-local). Language-specific heuristics:
+- `_is_external_import(import_text, language, root_path)`   determines if an import is external (third-party) or internal (project-local). Language-specific heuristics:
   - Python: checks for `.` in module name and whether the package directory exists
   - Go: checks for `.` in import path (external) vs. internal module path
   - C/C++: `#include "local.h"` is internal, `#include <system.h>` is external
@@ -219,14 +219,14 @@ The largest module (~1100 lines). Contains all tree-sitter node inspection utili
   - Zig: `@import("std")`, `@import("builtin")`, `@import("root")` are external; file paths are internal
 
 **Function call extraction:**
-- `extract_function_calls(node, source_code, language)` — finds all function/method calls within a node. Language-specific call node types:
+- `extract_function_calls(node, source_code, language)`   finds all function/method calls within a node. Language-specific call node types:
   - Most languages: `call_expression` (or `call` in Python)
   - Dart: `expression_statement` with custom parsing of `identifier` + `selector` + `arguments` pattern (Dart has no `call_expression` node type)
   - Zig: `call_expression`
   - Elixir: `call` nodes (keyword-filtered in branch counting)
 
 **Class reference extraction:**
-- `extract_class_references(node, source_code, language)` — finds class instantiations and type references. Language-specific:
+- `extract_class_references(node, source_code, language)`   finds class instantiations and type references. Language-specific:
   - Python: `call` where function name starts with uppercase
   - JavaScript/TypeScript: `new_expression`
   - Java: `object_creation_expression`
@@ -234,29 +234,29 @@ The largest module (~1100 lines). Contains all tree-sitter node inspection utili
   - C++: `new_expression` with type extraction
 
 **Variable reference extraction:**
-- `extract_variable_references(node, source_code, language)` — finds variable references, skipping function/class definitions and parameter declarations.
+- `extract_variable_references(node, source_code, language)`   finds variable references, skipping function/class definitions and parameter declarations.
 
 ### `extractors.py`
 
 Functions that combine multiple `node_utils` calls to produce structured symbol info:
 
-- **`extract_function_info(node, source_code, language, class_node_type)`** — returns `{type, name, location, parameters, return_type, docstring, branch_count, receiver?}`
-- **`extract_class_info(node, source_code, language)`** — returns `{type, name, location, base_classes, docstring, methods, nested_classes, variables}`
-- **`extract_variable_info(node, source_code, language)`** — returns `{type: "variable"|"attribute", name, location}`
-- **`extract_type_alias_info(node, source_code, language)`** — returns `{type: "type_alias", name, location, type_definition}`
-- **`extract_macro_info(node, source_code, language)`** — for C/Rust macros: `{type: "macro", name, location, parameters, ...}`
-- **`extract_struct_info(node, source_code, language)`** — `{type: "struct", name, location}`
-- **`extract_go_struct_info(node, source_code)`** — Go-specific struct extraction with fields
-- **`extract_interface_info(node, source_code, language)`** — `{type: "interface", name, location}`
-- **`extract_go_interface_info(node, source_code)`** — Go-specific interface extraction with methods
-- **`extract_enum_info(node, source_code, language)`** — `{type: "enum", name, location}`
+- **`extract_function_info(node, source_code, language, class_node_type)`**   returns `{type, name, location, parameters, return_type, docstring, branch_count, receiver?}`
+- **`extract_class_info(node, source_code, language)`**   returns `{type, name, location, base_classes, docstring, methods, nested_classes, variables}`
+- **`extract_variable_info(node, source_code, language)`**   returns `{type: "variable"|"attribute", name, location}`
+- **`extract_type_alias_info(node, source_code, language)`**   returns `{type: "type_alias", name, location, type_definition}`
+- **`extract_macro_info(node, source_code, language)`**   for C/Rust macros: `{type: "macro", name, location, parameters, ...}`
+- **`extract_struct_info(node, source_code, language)`**   `{type: "struct", name, location}`
+- **`extract_go_struct_info(node, source_code)`**   Go-specific struct extraction with fields
+- **`extract_interface_info(node, source_code, language)`**   `{type: "interface", name, location}`
+- **`extract_go_interface_info(node, source_code)`**   Go-specific interface extraction with methods
+- **`extract_enum_info(node, source_code, language)`**   `{type: "enum", name, location}`
 
 ### `code_indexer.py`
 
 The `CodeIndexer` class orchestrates the full indexing process:
 
-- **`__init__(root_dir, languages=None, db_path=".code_index.raggie", force_reindex=False, verbose=False, frontend_enabled=True)`** — initializes database, parsers, and statistics. When `frontend_enabled=False`, HTML/CSS/TSX languages are filtered out.
-- **`index_directory()`** — main entry point:
+- **`__init__(root_dir, languages=None, db_path=".code_index.raggie", force_reindex=False, verbose=False, frontend_enabled=True)`**   initializes database, parsers, and statistics. When `frontend_enabled=False`, HTML/CSS/TSX languages are filtered out.
+- **`index_directory()`**   main entry point:
   1. Collects files to index (respecting `.aiignore`/`.gitignore` and frontend config exclusions)
   2. Identifies changed files (mtime check → content hash check)
   3. Cascade: finds files that depend on changed files via frontend dependency edges and re-indexes them too
@@ -264,7 +264,7 @@ The `CodeIndexer` class orchestrates the full indexing process:
   5. Parses changed files in parallel using a **sliding window** over `ProcessPoolExecutor` (max 16 workers, window size = `max_workers × 4`)
   6. A **dedicated writer thread** consumes parsed results from a bounded queue and inserts into SQLite (backpressure-aware)
   7. Post-indexing dependency resolution pass (bulk JOIN/UPDATE instead of per-file queries)
-  8. Frontend cross-file resolution pass (`FrontendResolver.resolve_all()` — render relationships, style imports, custom properties, event handlers, selector matches)
+  8. Frontend cross-file resolution pass (`FrontendResolver.resolve_all()`   render relationships, style imports, custom properties, event handlers, selector matches)
   9. Cleans up unresolved temp_symbols and temp_file_references
   10. Prints summary statistics if verbose
 
@@ -311,7 +311,7 @@ Contains `QueryMixin` (read queries) and `DescriptionMixin` (description updates
 |-------------|---------|
 | Files       | `get_files(language?)`, `get_file_by_path(path)`, `get_file_by_id(id)`, `get_files_by_language(lang)` |
 | Functions   | `get_functions(file_id?)`, `get_function_by_id(id)`, `get_function_by_name(name, file_id?)`, `search_functions(pattern, file_id?)`, `get_file_functions(file_id)` |
-| Complexity  | `get_functions_by_complexity(min_branches?, min_lines?, max_branches?)`, `get_complex_symbols(min_branches, min_lines, match_any)`, `get_methods_by_complexity(class_id, ...)` |
+| Complexity  | `get_functions_by_complexity(min_branches?, min_lines?, max_branches?)`, `get_complex_symbols(min_branches, min_lines, match_any)`, `get_methods_by_complexity(class_id, ...)`, `get_top_complex_functions(limit)` |
 | Methods     | `get_methods(class_id)`, `get_method_by_name(class_id, name)`, `get_class_methods(class_id)` |
 | Classes     | `get_classes(file_id?)`, `get_class_by_id(id)`, `get_class_by_name(name, file_id?)`, `search_classes(pattern, file_id?)`, `get_file_classes(file_id)`, `get_nested_classes(class_id)`, `get_class_variables(class_id)` |
 | Variables   | `get_variables(file_id?)`, `get_variable_by_id(id)`, `get_variable_by_name(name, file_id?)`, `search_variables(pattern, file_id?)`, `get_file_variables(file_id)` |
@@ -333,27 +333,27 @@ Contains `QueryMixin` (read queries) and `DescriptionMixin` (description updates
 - `set_struct_description(id, desc)`, `set_struct_description_by_name(name, desc, file_path?)`
 - `set_interface_description(id, desc)`, `set_interface_description_by_name(name, desc, file_path?)`
 - `set_enum_description(id, desc)`, `set_enum_description_by_name(name, desc, file_path?)`
-- `set_symbol_description(symbol_type, symbol_id, desc)` — generic dispatch by type (`function`, `method`, `class`, `variable`, `type_alias`, `struct`, `interface`, `enum`)
-- `get_symbol_description(symbol_type, symbol_id)` — generic get by type and ID
-- `get_symbol_description_by_name(symbol_type, name, file_path?)` — generic get by type and name
-- `search_descriptions(query, symbol_types?, limit)` — search symbols by description content (SQL LIKE)
-- `get_undocumented_symbols(symbol_types?, file_id?)` — find symbols with no description
+- `set_symbol_description(symbol_type, symbol_id, desc)`   generic dispatch by type (`function`, `method`, `class`, `variable`, `type_alias`, `struct`, `interface`, `enum`)
+- `get_symbol_description(symbol_type, symbol_id)`   generic get by type and ID
+- `get_symbol_description_by_name(symbol_type, name, file_path?)`   generic get by type and name
+- `search_descriptions(query, symbol_types?, limit)`   search symbols by description content (SQL LIKE)
+- `get_undocumented_symbols(symbol_types?, file_id?)`   find symbols with no description
 
 ### `models.py`
 
 Dataclasses representing code entities:
 
-- **`Location`** — `start_line`, `start_column`, `end_line`, `end_column`, `start_byte?`, `end_byte?`
-- **`Function`** — `id`, `name`, `type` (`"function"` or `"method"`), `file_id`, `file_path`, `location`, `parameters`, `return_type?`, `docstring?`, `description?`, `receiver?`, `parent_id?`, `parent_type?`, `branch_count`
-- **`Class`** — `id`, `name`, `file_id`, `file_path`, `location`, `base_classes`, `docstring?`, `description?`, `parent_id?`, `namespace?`
-- **`Variable`** — `id`, `name`, `type` (`"variable"` or `"attribute"`), `file_id`, `file_path`, `location`, `field_type?`, `description?`, `parent_id?`, `parent_type?`
-- **`TypeAlias`** — `id`, `name`, `file_id`, `file_path`, `location`, `type_definition?`, `description?`
-- **`Struct`** — `id`, `name`, `file_id`, `file_path`, `location`, `description?`
-- **`Interface`** — `id`, `name`, `file_id`, `file_path`, `location`, `description?`
-- **`Enum`** — `id`, `name`, `file_id`, `file_path`, `location`, `description?`
-- **`Namespace`** — `id`, `name`, `file_id`, `file_path`, `location`, `description?`
-- **`File`** — `id`, `path`, `absolute_path`, `language`
-- **`Dependency`** — `id`, `file_id`, `file_path`, `dependency_type`, `name`, `source_function_id?`, `target_function_id?`, `target_class_id?`, `location?`, `is_external`
+- **`Location`**   `start_line`, `start_column`, `end_line`, `end_column`, `start_byte?`, `end_byte?`
+- **`Function`**   `id`, `name`, `type` (`"function"` or `"method"`), `file_id`, `file_path`, `location`, `parameters`, `return_type?`, `docstring?`, `description?`, `receiver?`, `parent_id?`, `parent_type?`, `branch_count`
+- **`Class`**   `id`, `name`, `file_id`, `file_path`, `location`, `base_classes`, `docstring?`, `description?`, `parent_id?`, `namespace?`
+- **`Variable`**   `id`, `name`, `type` (`"variable"` or `"attribute"`), `file_id`, `file_path`, `location`, `field_type?`, `description?`, `parent_id?`, `parent_type?`
+- **`TypeAlias`**   `id`, `name`, `file_id`, `file_path`, `location`, `type_definition?`, `description?`
+- **`Struct`**   `id`, `name`, `file_id`, `file_path`, `location`, `description?`
+- **`Interface`**   `id`, `name`, `file_id`, `file_path`, `location`, `description?`
+- **`Enum`**   `id`, `name`, `file_id`, `file_path`, `location`, `description?`
+- **`Namespace`**   `id`, `name`, `file_id`, `file_path`, `location`, `description?`
+- **`File`**   `id`, `path`, `absolute_path`, `language`
+- **`Dependency`**   `id`, `file_id`, `file_path`, `dependency_type`, `name`, `source_function_id?`, `target_function_id?`, `target_class_id?`, `location?`, `is_external`
 
 All models have a `from_row(row, file_path?)` classmethod for constructing from SQLite rows.
 
@@ -364,16 +364,16 @@ Defines the SQLite schema via `SCHEMA_SQL` string and `init_database(db_path)` f
 ### `cli.py`
 
 Command-line argument parsing:
-- `directory` — directory to index
-- `-l/--languages` — comma-separated language filter
-- `-o/--output` — output database path (default: `code_index.db`)
-- `--list-languages` — print supported languages and exit
-- `--list-frontend-languages` — print supported frontend languages and exit
-- `--frontend` / `--no-frontend` — enable/disable frontend indexing (default: enabled)
-- `--export-json` — export database to JSON
-- `--force` — force reindex all files
-- `--graph` — view dependency graph for a file
-- `-v/--verbose` — print detailed timing and progress information
+- `directory`   directory to index
+- `-l/--languages`   comma-separated language filter
+- `-o/--output`   output database path (default: `code_index.db`)
+- `--list-languages`   print supported languages and exit
+- `--list-frontend-languages`   print supported frontend languages and exit
+- `--frontend` / `--no-frontend`   enable/disable frontend indexing (default: enabled)
+- `--export-json`   export database to JSON
+- `--force`   force reindex all files
+- `--graph`   view dependency graph for a file
+- `-v/--verbose`   print detailed timing and progress information
 
 ### `export_to_json.py`
 
@@ -408,7 +408,7 @@ Exports the SQLite index database to a JSON file for external consumption or bac
 | `docstring`    | TEXT    | Extracted docstring                |
 | `description`  | TEXT    | User/AI-provided description       |
 | `receiver`     | TEXT    | Go method receiver                 |
-| `branch_count` | INTEGER | Number of conditional branches     |
+| `branch_count` | REAL    | Weighted branch count (depth-weighted via `NESTING_WEIGHT_MODE`) |
 
 ### `classes`
 | Column         | Type    | Description                        |
@@ -486,9 +486,9 @@ The extraction pipeline in `_extract_symbols()` uses an **iterative stack-based 
    - Otherwise, push children onto the stack with the same state.
 
 **State tracked during traversal:**
-- `in_function` — whether we're inside a function body (affects variable extraction)
-- `current_class_id` — the class ID for method association
-- `current_namespace` — the namespace for C# class association
+- `in_function`   whether we're inside a function body (affects variable extraction)
+- `current_class_id`   the class ID for method association
+- `current_namespace`   the namespace for C# class association
 
 ---
 
@@ -502,10 +502,10 @@ Extracted by `extract_imports()` at the file level. Each import is classified as
 ### Function-Level Dependencies
 Extracted by `_extract_deps()` for each function:
 
-- **`function_call`** — direct function calls (e.g., `foo()`)
-- **`method_call`** — method calls on objects (e.g., `obj.method()`)
-- **`class_reference`** — class instantiations and type references (e.g., `new Foo()`)
-- **`variable_reference`** — variable references within function bodies
+- **`function_call`**   direct function calls (e.g., `foo()`)
+- **`method_call`**   method calls on objects (e.g., `obj.method()`)
+- **`class_reference`**   class instantiations and type references (e.g., `new Foo()`)
+- **`variable_reference`**   variable references within function bodies
 
 ### Resolution Process
 During database insertion:
@@ -556,7 +556,7 @@ During database insertion:
 
 ### Zig
 - Functions: `function_declaration`
-- Variables: `variable_declaration` (const/var) — identifier is a direct child, not a `left` field
+- Variables: `variable_declaration` (const/var)   identifier is a direct child, not a `left` field
 - Imports: `builtin_function` nodes, filtered to only `@import(...)` calls (other builtins like `@as`, `@bitCast` are excluded)
 - Function calls: `call_expression`
 - Branch types: `if_statement`, `for_statement`, `while_statement`, `switch_statement`
@@ -633,13 +633,13 @@ Dart's tree-sitter grammar separates `function_signature` (or `method_signature`
 3. This is handled in both `_extract_symbols()` (top-level functions) and `_process_class_body()` (methods inside classes).
 
 ### Kotlin Interface/Enum Detection
-Kotlin's tree-sitter grammar uses `class_declaration` for classes, interfaces, and enums. The `_extract_symbols()` function checks for `interface` and `enum` keyword children to reclassify these nodes. The `LANGUAGE_CONFIG` for Kotlin does not include `interface` or `enum` node types — they are handled entirely in `parse_worker.py` logic.
+Kotlin's tree-sitter grammar uses `class_declaration` for classes, interfaces, and enums. The `_extract_symbols()` function checks for `interface` and `enum` keyword children to reclassify these nodes. The `LANGUAGE_CONFIG` for Kotlin does not include `interface` or `enum` node types   they are handled entirely in `parse_worker.py` logic.
 
 ### Test Directory Skipping
 `file_utils.collect_files_to_index()` skips directories named `test` or `tests`. This is a hard-coded filter that cannot be configured via ignore patterns. This may cause issues for projects that have legitimate source code in directories named `test`.
 
 ### Ignore File Priority
-The indexer checks for `.aiignore` first, falling back to `.gitignore` if `.aiignore` doesn't exist. Both use `pathspec` with `GitWildMatchPattern` for git-compatible pattern matching.
+The indexer checks for `.aiignore` first, falling back to `.gitignore` if `.aiignore` doesn't exist. Both use `pathspec` with `GitIgnoreSpec` for git-compatible pattern matching.
 
 ### Content Hash for Incremental Reindexing
 The indexer uses xxhash64 for content hashing, which is fast but not cryptographically secure. This is acceptable for change detection but should not be relied upon for integrity verification.
@@ -648,7 +648,7 @@ The indexer uses xxhash64 for content hashing, which is fast but not cryptograph
 File parsing runs in a `ProcessPoolExecutor` with `min(cpu_count, file_count, 16)` workers. Parsers are cached per-worker process via a global `_parsers` dict. A sliding window of `max_workers × 4` in-flight futures keeps workers fed, while a dedicated writer thread consumes results from a bounded queue (`maxsize = window_size × 2`) and handles DB inserts. This provides backpressure and eliminates idle time between parse and insert phases.
 
 ### Unresolved Dependencies
-Function calls and class references that don't match any defined symbol in the codebase are stored as `temp_symbols` during indexing. After all files are processed, these are cleaned up — their dependencies are deleted from the `dependencies` table. This means external function calls (e.g., `print()` in Python, `fmt.Println()` in Go) are not retained in the final database.
+Function calls and class references that don't match any defined symbol in the codebase are stored as `temp_symbols` during indexing. After all files are processed, these are cleaned up   their dependencies are deleted from the `dependencies` table. This means external function calls (e.g., `print()` in Python, `fmt.Println()` in Go) are not retained in the final database.
 
 Similarly, unresolved file-path references (external URLs or missing files) are stored in `temp_file_references` and cleaned up after indexing.
 
@@ -658,36 +658,16 @@ Similarly, unresolved file-path references (external URLs or missing files) are 
 
 ### Project Directory Detection
 
-Before indexing, the agent checks whether the current working directory looks like a code project by scanning for **project marker files**. This prevents accidentally indexing unrelated directories (e.g. a user's home directory) which could take a very long time and produce a useless index.
-
-**Markers checked** (any one is sufficient):
-
-| Category | Markers |
-|----------|---------|
-| VCS | `.git`, `.hg`, `.svn` |
-| Python | `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements.txt`, `Pipfile`, `poetry.lock`, `uv.lock`, `tox.ini`, `MANIFEST.in` |
-| JavaScript/TypeScript | `package.json`, `tsconfig.json`, `yarn.lock`, `pnpm-lock.yaml`, `package-lock.json`, `bower.json`, `.npmrc`, `deno.json` |
-| Go | `go.mod`, `go.sum`, `go.work` |
-| Rust | `Cargo.toml` |
-| C/C++ | `CMakeLists.txt`, `Makefile`, `Makefile.am`, `configure.ac`, `meson.build`, `BUCK`, `BUILD`, `BUILD.bazel`, `WORKSPACE` |
-| C#/.NET | `Directory.Build.props`, `global.json`, `*.csproj`, `*.sln` (glob-matched) |
-| Java/Kotlin | `pom.xml`, `build.gradle`, `build.gradle.kts`, `settings.gradle`, `settings.gradle.kts`, `gradle.properties` |
-| PHP | `composer.json`, `artisan` |
-| Ruby | `Gemfile`, `Rakefile`, `.rspec` |
-| Elixir | `mix.exs` |
-| Zig | `build.zig` |
-| Dart/Flutter | `pubspec.yaml` |
-| Lua | `rockspec` |
-| Generic/editor | `.raggie`, `.vscode`, `.idea`, `.editorconfig` |
+Before indexing, the agent checks whether a `.raggie` folder exists in the current working directory. This folder is created by Raggie on first run, so its presence indicates the user has already confirmed this is a project directory. This prevents accidentally indexing unrelated directories (e.g. a user's home directory) which could take a very long time and produce a useless index.
 
 **Behavior:**
 
-- **Markers found** → indexing proceeds automatically.
-- **No markers found (interactive session)** → a warning is displayed and the user is prompted: `Index anyway? (y/N)`. Declining exits the agent with a suggestion to `cd` into a project directory or start a new one with `raggie code <project-name>`.
-- **No markers found (subagent session)** → indexing is skipped (subagents cannot prompt interactively).
+- **`.raggie` exists** → indexing proceeds automatically.
+- **No `.raggie` folder, but directory has no subdirectories** → indexing proceeds without prompting (a flat directory is small enough to be safe).
+- **No `.raggie` folder, directory has subdirectories (interactive session)** → a warning is displayed and the user is prompted: `Do you want to create a new project here? (y/N)`. Declining exits with a suggestion to `cd` into a project directory or start a new one with `raggie code <project-name>`.
 - **Manual re-indexing** → use the `/reindex` in-chat command at any time. Supports `/reindex --force` to re-index all files from scratch.
 
-This check is implemented in `Agent.__init__()` in `src/Agent/agent.py`, before the call to `CodeIndexSDK.index_directory()`.
+This check is implemented in `main()` in `src/raggie.py`, before the `Agent` is created. The `Agent` class itself is interface-agnostic and always indexes unconditionally. Subagents inherit the parent's `.raggie` folder (same working directory), so they always index normally.
 
 ### CLI Usage
 
@@ -744,6 +724,11 @@ all_deps = sdk.get_function_dependencies_grouped(function_id=10)
 complex_funcs = sdk.get_complex_symbols(min_branches=10, min_lines=50)
 complex_methods = sdk.get_methods_by_complexity(class_id=cls.id, min_branches=5)
 
+# Top complex functions (includes methods + macros, sorted by complexity score)
+top_funcs = sdk.get_top_complex_functions(limit=5)
+# Each Function has: name, type, file_path, location, branch_count
+# Complexity score = round(branch_count / 30, 2) + (line_count / 100)
+
 # Statistics
 stats = sdk.get_statistics()
 lang_stats = sdk.get_language_statistics()
@@ -766,26 +751,26 @@ sdk.close()
 
 Tests are located in `tests/indexing/` and cover:
 
-- **`test_config.py`** — language config validation (no duplicates, node types are lists or None)
-- **`test_python.py`** — Python-specific extraction (functions, classes, methods, imports, variables, docstrings, branches, base classes, dependencies)
-- **`test_go.py`** — Go-specific extraction (functions, structs, interfaces, type aliases, imports, methods, branches)
-- **`test_rust.py`** — Rust-specific extraction (functions, structs, enums, imports)
-- **`test_c_family.py`** — C and C++ extraction (functions, classes, enums, imports)
-- **`test_csharp.py`** — C#-specific extraction
-- **`test_web_languages.py`** — JavaScript and TypeScript extraction
-- **`test_jvm_languages.py`** — Java and Kotlin extraction
-- **`test_php.py`** — PHP extraction
-- **`test_dart.py`** — Dart extraction
-- **`test_elixir.py`** — Elixir extraction
-- **`test_pipeline.py`** — full indexing pipeline and incremental reindexing
-- **`test_edge_cases.py`** — edge case handling
-- **`test_real_projects.py`** — integration tests against real open-source projects cloned per language
-- **`test_real_world_repos.py`** — integration tests against real-world repositories
-- **`test_sdk_queries.py`** — SDK query method tests
-- **`test_html_indexing.py`** — HTML semantic extraction
-- **`test_css_indexing.py`** — CSS semantic extraction
-- **`test_jsx_indexing.py`** — JSX/TSX semantic extraction
-- **`test_frontend_*.py`** — frontend indexing, graph traversal, cross-file resolution, invalidation, diagnostics, location lookup, runtime resolution, performance, and more (20+ test files)
+- **`test_config.py`**   language config validation (no duplicates, node types are lists or None)
+- **`test_python.py`**   Python-specific extraction (functions, classes, methods, imports, variables, docstrings, branches, base classes, dependencies)
+- **`test_go.py`**   Go-specific extraction (functions, structs, interfaces, type aliases, imports, methods, branches)
+- **`test_rust.py`**   Rust-specific extraction (functions, structs, enums, imports)
+- **`test_c_family.py`**   C and C++ extraction (functions, classes, enums, imports)
+- **`test_csharp.py`**   C#-specific extraction
+- **`test_web_languages.py`**   JavaScript and TypeScript extraction
+- **`test_jvm_languages.py`**   Java and Kotlin extraction
+- **`test_php.py`**   PHP extraction
+- **`test_dart.py`**   Dart extraction
+- **`test_elixir.py`**   Elixir extraction
+- **`test_pipeline.py`**   full indexing pipeline and incremental reindexing
+- **`test_edge_cases.py`**   edge case handling
+- **`test_real_projects.py`**   integration tests against real open-source projects cloned per language
+- **`test_real_world_repos.py`**   integration tests against real-world repositories
+- **`test_sdk_queries.py`**   SDK query method tests
+- **`test_html_indexing.py`**   HTML semantic extraction
+- **`test_css_indexing.py`**   CSS semantic extraction
+- **`test_jsx_indexing.py`**   JSX/TSX semantic extraction
+- **`test_frontend_*.py`**   frontend indexing, graph traversal, cross-file resolution, invalidation, diagnostics, location lookup, runtime resolution, performance, and more (20+ test files)
 
 Run tests:
 ```bash
@@ -893,11 +878,11 @@ After indexing, the `FrontendResolver.resolve_all()` pass resolves cross-file re
 
 When a file changes, `_get_dependent_files()` identifies dependent files via frontend dependency edges:
 
-- `render_relationships` — consumers of a changed component
-- `style_imports` — files importing a changed CSS file
-- `style_custom_property_usages` — files using a changed custom property
-- `frontend_events` — files referencing a changed handler symbol
-- `style_selector_matches` — bidirectional selector↔element consumers
+- `render_relationships`   consumers of a changed component
+- `style_imports`   files importing a changed CSS file
+- `style_custom_property_usages`   files using a changed custom property
+- `frontend_events`   files referencing a changed handler symbol
+- `style_selector_matches`   bidirectional selector↔element consumers
 
 Dependent files are re-indexed, then `resolve_all()` refreshes all cross-file relationships.
 

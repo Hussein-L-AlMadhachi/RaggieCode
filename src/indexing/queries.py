@@ -4,7 +4,9 @@ Query mixin for CodeIndexSDK.
 All get_* and search_* methods that read entities from the SQLite index.
 """
 
-from typing import List, Dict, Optional, Any
+import os
+import sqlite3
+from typing import Callable, List, Dict, Optional, Any
 
 from indexing.models import (
     Function, Class, Variable, TypeAlias,
@@ -12,11 +14,56 @@ from indexing.models import (
 )
 
 
+def normalize_index_path(path: str) -> str:
+    """Normalize a user-supplied file path to the repo-relative form used in the index.
+
+    Strips a leading './' and, for absolute paths under the current working
+    directory, converts them to relative paths.
+    """
+    p = path[2:] if path.startswith('./') else path
+    if os.path.isabs(p):
+        try:
+            p = os.path.relpath(p, os.getcwd())
+        except ValueError:
+            pass  # Different drive (Windows)   leave as-is
+    return p
+
+
+def resolve_file_rows(conn, path: str):
+    """Resolve a user-supplied path to rows in the files table.
+
+    Exact path match first; if that fails, all files sharing the basename
+    are collected so callers can handle ambiguity instead of silently
+    picking an arbitrary match.
+
+    Returns (row, candidates):
+      (row, [])          unique resolution
+      (None, [...])      not found, or ambiguous (candidates holds matching paths)
+    """
+    normalized = normalize_index_path(path)
+    row = conn.execute(
+        "SELECT * FROM files WHERE path = ?", (normalized,)
+    ).fetchone()
+    if row:
+        return row, []
+
+    basename = normalized.rsplit('/', 1)[-1]
+    rows = conn.execute(
+        "SELECT * FROM files WHERE path = ? OR substr(path, -?) = ? ORDER BY path",
+        (basename, len(basename) + 1, '/' + basename)
+    ).fetchall()
+    if len(rows) == 1:
+        return rows[0], []
+    return None, [r['path'] for r in rows]
+
+
 class QueryMixin:
     """
     Mixin providing all query methods for the code index.
     Expects self.conn to be a sqlite3.Connection set by the host class.
     """
+    # Provided by the host class (CodeIndexSDK) via _connect().
+    conn: sqlite3.Connection
 
     # ==================== File Queries ====================
 
@@ -38,6 +85,18 @@ class QueryMixin:
         cursor.execute("SELECT * FROM files WHERE path = ?", (normalized_path,))
         row = cursor.fetchone()
         return File.from_row(row) if row else None
+
+    def resolve_file(self, path: str):
+        """Resolve a user-supplied path (absolute or relative) to an indexed file.
+
+        Exact match first; basename fallback only when unambiguous.
+
+        Returns (file, candidates):
+          (File, [])         unique resolution
+          (None, [...])      not found (empty) or ambiguous (matching paths)
+        """
+        row, candidates = resolve_file_rows(self.conn, path)
+        return (File.from_row(row) if row else None), candidates
 
     def get_file_by_id(self, file_id: int) -> Optional[File]:
         """Get a file by its ID."""
@@ -255,6 +314,35 @@ class QueryMixin:
             if file:
                 methods.append(Function.from_row(row, file.path))
         return methods
+
+    def get_top_complex_functions(self, limit: int = 5) -> List[Function]:
+        """Get the most complex functions and methods by branch count.
+
+        Includes both top-level functions and class methods (unlike
+        get_functions_by_complexity which only returns parent_id IS NULL).
+
+        Args:
+            limit: Maximum number of results to return.
+
+        Returns:
+            List of Function objects ordered by branch_count descending.
+        """
+        if self.conn is None:
+            return []
+        cursor = self.conn.cursor()
+        cursor.execute(
+            "SELECT * FROM functions WHERE branch_count > 0 "
+            "ORDER BY (branch_count / 28.0 + "
+            "(json_extract(location, '$.end_line') - json_extract(location, '$.start_line') + 1) / 100.0) DESC, "
+            "branch_count DESC, name LIMIT ?",
+            (limit,)
+        )
+        results = []
+        for row in cursor.fetchall():
+            file = self.get_file_by_id(row['file_id'])
+            if file:
+                results.append(Function.from_row(row, file.path))
+        return results
 
     # ==================== Method Queries ====================
 
@@ -1036,9 +1124,234 @@ class QueryMixin:
                 calls.append(Dependency.from_row(row, file.path))
         return calls
 
+    # ==================== Class Bloat Queries ====================
+
+    def get_class_bloat_metrics(self, class_id: int) -> Optional[Dict[str, Any]]:
+        """Compute bloat (bloated class) metrics for a single class.
+
+        Args:
+            class_id: ID of the class to analyze.
+
+        Returns:
+            None if the class does not exist. Otherwise a dict with keys:
+              - method_count: number of methods (functions owned by the class)
+              - attribute_count: number of class attributes (variables owned by the class)
+              - class_loc: lines of code spanned by the class declaration
+              - avg_method_loc: average LOC across the class's methods
+              - max_method_loc: LOC of the longest method
+              - max_method_branches: highest branch_count among methods
+              - fan_in: distinct external functions that call the class's
+                methods or reference the class (class_reference)
+              - fan_out: distinct internal targets (classes, methods, or
+                functions) that the class's methods call
+              - caller_files: distinct files containing the callers counted by fan_in
+        """
+        cursor = self.conn.cursor()
+
+        cursor.execute(
+            """SELECT *,
+                      json_extract(location, '$.start_line') AS start_line,
+                      json_extract(location, '$.end_line') AS end_line
+               FROM classes WHERE id = ?""",
+            (class_id,)
+        )
+        class_row = cursor.fetchone()
+        if not class_row:
+            return None
+
+        # Method and attribute counts
+        cursor.execute(
+            "SELECT COUNT(*) FROM functions WHERE parent_id = ? AND parent_type = 'class'",
+            (class_id,)
+        )
+        method_count = cursor.fetchone()[0]
+
+        cursor.execute(
+            "SELECT COUNT(*) FROM variables WHERE parent_id = ? AND parent_type = 'class'",
+            (class_id,)
+        )
+        attribute_count = cursor.fetchone()[0]
+
+        # Per-method LOC (from location JSON) and max branch count
+        cursor.execute(
+            """SELECT branch_count,
+                      json_extract(location, '$.start_line') AS start_line,
+                      json_extract(location, '$.end_line') AS end_line
+               FROM functions WHERE parent_id = ? AND parent_type = 'class'""",
+            (class_id,)
+        )
+        method_locs = []
+        max_method_branches = 0
+        for row in cursor.fetchall():
+            if row['start_line'] is not None and row['end_line'] is not None:
+                method_locs.append(row['end_line'] - row['start_line'] + 1)
+            if row['branch_count'] and row['branch_count'] > max_method_branches:
+                max_method_branches = row['branch_count']
+
+        avg_method_loc = (sum(method_locs) / len(method_locs)) if method_locs else 0.0
+
+        # Fan-in: distinct external callers of the class's methods, plus
+        # distinct class_reference dependencies pointing at the class itself.
+        cursor.execute(
+            """SELECT COUNT(DISTINCT d.source_function_id) AS fan_in,
+                      COUNT(DISTINCT d.file_id) AS caller_files
+               FROM dependencies d
+               WHERE d.source_function_id IS NOT NULL
+                 AND d.source_function_id NOT IN (
+                     SELECT id FROM functions
+                     WHERE parent_id = ? AND parent_type = 'class')
+                 AND (d.target_function_id IN (
+                          SELECT id FROM functions
+                          WHERE parent_id = ? AND parent_type = 'class')
+                      OR (d.dependency_type = 'class_reference'
+                          AND d.target_class_id = ?))""",
+            (class_id, class_id, class_id)
+        )
+        fan_row = cursor.fetchone()
+        fan_in = fan_row['fan_in'] if fan_row else 0
+        caller_files = fan_row['caller_files'] if fan_row else 0
+
+        # Fan-out: distinct internal targets coupled to the class's methods.
+        # A target is identified by its class (target_class_id), the target
+        # function's parent class, or its file (for free functions).
+        cursor.execute(
+            """SELECT COUNT(DISTINCT COALESCE(d.target_class_id, tf.parent_id, 'f:' || tf.file_id)) AS fan_out
+               FROM dependencies d
+               LEFT JOIN functions tf ON tf.id = d.target_function_id
+               WHERE d.source_function_id IN (
+                         SELECT id FROM functions
+                         WHERE parent_id = ? AND parent_type = 'class')
+                 AND d.dependency_type IN ('function_call', 'method_call', 'class_reference')
+                 AND d.is_external = 0
+                 AND COALESCE(d.target_class_id, tf.parent_id, 'f:' || tf.file_id) != ?""",
+            (class_id, class_id)
+        )
+        fan_out_row = cursor.fetchone()
+        fan_out = fan_out_row['fan_out'] if fan_out_row else 0
+
+        return {
+            'method_count': method_count,
+            'attribute_count': attribute_count,
+            'class_loc': (class_row['end_line'] - class_row['start_line'] + 1)
+                          if class_row['start_line'] is not None and class_row['end_line'] is not None else 0,
+            'avg_method_loc': avg_method_loc,
+            'max_method_loc': max(method_locs) if method_locs else 0,
+            'max_method_branches': max_method_branches,
+            'fan_in': fan_in,
+            'fan_out': fan_out,
+            'caller_files': caller_files,
+        }
+
+    def get_top_bloated_classes(self, limit: int = 5, min_score: float = 0.8) -> List[Dict[str, Any]]:
+        """Find the most bloated (super-bloated) top-level classes.
+
+        Iterates all top-level classes (parent_id IS NULL), computes metrics
+        via get_class_bloat_metrics and a score via calculate_bloat_score,
+        and returns the worst offenders.
+
+        Args:
+            limit: Maximum number of results to return.
+            min_score: Minimum bloat score (inclusive) for inclusion.
+
+        Returns:
+            List of dicts with keys: class_id, name, file_path, line, score,
+            severity, and all raw metrics from get_class_bloat_metrics.
+            Sorted by score descending, then attribute_count descending.
+        """
+        cursor = self.conn.cursor()
+        cursor.execute(
+            """SELECT *,
+                      json_extract(location, '$.start_line') AS start_line
+               FROM classes WHERE parent_id IS NULL ORDER BY name"""
+        )
+
+        results = []
+        for row in cursor.fetchall():
+            metrics = self.get_class_bloat_metrics(row['id'])
+            if not metrics or metrics['method_count'] == 0:
+                continue
+
+            score = calculate_bloat_score(
+                metrics['method_count'],
+                metrics['avg_method_loc'],
+                metrics['attribute_count'],
+                metrics['fan_out'],
+                metrics['fan_in'],
+            )
+            if score < min_score:
+                continue
+
+            file = self.get_file_by_id(row['file_id'])
+            result = {
+                'class_id': row['id'],
+                'name': row['name'],
+                'file_path': file.path if file else None,
+                'line': row['start_line'],
+                'score': score,
+                'severity': bloat_severity(score),
+            }
+            result.update(metrics)
+            results.append(result)
+
+        results.sort(key=lambda r: (-r['score'], -r['attribute_count']))
+        return results[:limit]
+
+
+def calculate_bloat_score(method_count: int, avg_method_loc: float,
+                          attribute_count: int, fan_out: int, fan_in: int) -> float:
+    """Compute a bloat score for a class from its raw metrics.
+
+    The score is a weighted sum of structural bloat indicators, each
+    normalized so that reaching the weight contributes 1.0 to the score:
+
+      - method_count / 30: classes past ~30 methods are unwieldy
+      - avg_method_loc / 30: methods averaging 30+ lines suggest the class
+        does too much work inline
+      - attribute_count / 15: more than ~15 attributes implies excessive state
+      - fan_out / 10: more than ~10 distinct collaborators is heavy coupling
+      - fan_in contributes a flat 0.5 penalty when more than 5 external
+        functions depend on the class, since being widely depended-upon
+        makes refactoring (splitting the class) riskier
+
+    A score below 1.0 is considered acceptable; 1.0+ LARGE, 2.0+ BLOATED,
+    3.0+ VERY BLOATED (see bloat_severity).
+    """
+    fan_in_penalty = 0.5 if fan_in > 5 else 0.0
+    return round(
+        method_count / 30
+        + avg_method_loc / 30
+        + attribute_count / 15
+        + fan_out / 10
+        + fan_in_penalty,
+        2,
+    )
+
+
+def bloat_severity(score: float) -> str:
+    """Map a bloat score to a severity label.
+
+    Returns "OK" (<1.0), "LARGE" (>=1.0), "BLOATED" (>=2.0),
+    or "VERY BLOATED" (>=3.0).
+    """
+    if score >= 3.0:
+        return "VERY BLOATED"
+    if score >= 2.0:
+        return "BLOATED"
+    if score >= 1.0:
+        return "LARGE"
+    return "OK"
+
 
 class DescriptionMixin:
     """Mixin providing description update methods for code index entities."""
+
+    # Provided by the host class (CodeIndexSDK) via _connect().
+    conn: sqlite3.Connection
+
+    # Methods/attributes provided by the other mixin (QueryMixin) and the
+    # host class (CodeIndexSDK); resolved at runtime through MRO.
+    get_file_by_id: Callable[[int], Optional[File]]
+    root_dir: str
 
     def set_function_description(self, func_id: int, description: str) -> bool:
         """Set description for a function by ID."""

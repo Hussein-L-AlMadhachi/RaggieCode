@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from .utils import is_ignored_by_gitignore, is_within_cwd, BLUE, RESET
+from .utils import is_ignored_by_gitignore, is_within_cwd, prompt_path_permission, denial_content, BLUE, RESET
 
 
 
@@ -12,19 +12,25 @@ def handle(arguments, toolcall_id):
     try:
         # Check if the file is outside the current working directory
         if not is_within_cwd(file_path):
-            return {
-                "role": "tool",
-                "tool_call_id": toolcall_id,
-                "content": "Error: access denied - path is outside the current working directory",
-            }
+            if not prompt_path_permission(
+                file_path, "read", "path is outside the current working directory"
+            ):
+                return {
+                    "role": "tool",
+                    "tool_call_id": toolcall_id,
+                    "content": denial_content("Error: access denied - path is outside the current working directory"),
+                }
 
         # Check if the file is gitignored
         if is_ignored_by_gitignore(file_path):
-            return {
-                "role": "tool",
-                "tool_call_id": toolcall_id,
-                "content": "Error: file is gitignored",
-            }
+            if not prompt_path_permission(
+                file_path, "read", "file is gitignored"
+            ):
+                return {
+                    "role": "tool",
+                    "tool_call_id": toolcall_id,
+                    "content": denial_content("Error: file is gitignored"),
+                }
 
         with open(file_path, "r") as f:
             result = f.read()

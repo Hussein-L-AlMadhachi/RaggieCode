@@ -15,7 +15,8 @@ from indexing.node_utils import (
     extract_field_text,
     extract_go_receiver,
     extract_go_type_name,
-    count_branches
+    count_branches,
+    count_macro_branches,
 )
 
 
@@ -28,7 +29,20 @@ def extract_function_info(node, source_code, language, class_node_type):
     docstring = extract_docstring(node, source_code, language)
     
     # Count branches in function body
-    branch_count = count_branches(node, language, source_code)
+    # Dart: function_signature and function_body are siblings, so we need
+    # to find the sibling function_body node to count branches inside it.
+    branch_node = node
+    if language == "dart" and node.parent:
+        node_start, node_end = node.start_byte, node.end_byte
+        found_self = False
+        for sibling in node.parent.children:
+            if sibling.start_byte == node_start and sibling.end_byte == node_end:
+                found_self = True
+                continue
+            if found_self and sibling.type == "function_body":
+                branch_node = sibling
+                break
+    branch_count = count_branches(branch_node, language, source_code)
     
     # Handle Go method receivers
     receiver = None
@@ -85,11 +99,18 @@ def extract_variable_info(node, source_code, language):
             "location": get_node_location(node)
         }
     
-    return {
+    var_info = {
         "type": "variable",
         "name": name,
         "location": get_node_location(node)
     }
+    # Python annotated assignment (`attr: int = 5`): the annotation lives in
+    # the 'type' field of the assignment node. Keep it as field_type.
+    if language == "python":
+        type_node = node.child_by_field_name("type")
+        if type_node:
+            var_info["field_type"] = extract_node_text(type_node, source_code)
+    return var_info
 
 
 def extract_type_alias_info(node, source_code, language=None):
@@ -130,7 +151,7 @@ def extract_macro_info(node, source_code, language):
         "parameters": params,
         "return_type": None,
         "docstring": None,
-        "branch_count": 0,
+        "branch_count": count_macro_branches(node, language, source_code),
     }
 
 
