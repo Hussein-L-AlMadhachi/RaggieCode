@@ -17,6 +17,8 @@ import json
 import sqlite3
 from typing import Dict, List, Optional, Any
 
+from indexing.queries import resolve_file_rows
+
 
 # ──────────────────────────────────────────────────────────────
 # Helpers
@@ -40,30 +42,38 @@ def _get_file(conn, file_id: int) -> Optional[Dict[str, Any]]:
 
 
 def _get_file_by_path(conn, file_path: str) -> Optional[Dict[str, Any]]:
-    normalized = file_path[2:] if file_path.startswith("./") else file_path
-    row = conn.execute(
-        "SELECT id, path, language, content_hash FROM files WHERE path = ?",
-        (normalized,)
-    ).fetchone()
-    if not row:
-        import os
-        filename = os.path.basename(normalized)
-        row = conn.execute(
-            "SELECT id, path, language, content_hash FROM files WHERE path LIKE ?",
-            (f"%{filename}",)
-        ).fetchone()
+    row, _ = resolve_file_rows(conn, file_path)
     return dict(row) if row else None
+
+
+_FRONTEND_ENTITY_TABLES = (
+    "frontend_components", "markup_elements", "frontend_events",
+    "frontend_bindings", "style_selectors", "style_custom_properties",
+    "style_imports",
+)
+
+
+def _has_frontend_entities(conn: sqlite3.Connection, file_id: int) -> bool:
+    """True if the file has any frontend entities (components, markup, styles, ...)."""
+    for table in _FRONTEND_ENTITY_TABLES:
+        row = conn.execute(
+            f"SELECT 1 FROM {table} WHERE file_id = ? LIMIT 1", (file_id,)
+        ).fetchone()
+        if row:
+            return True
+    return False
 
 
 def _is_frontend_file(file_info: Dict[str, Any]) -> bool:
     lang = file_info.get("language", "")
-    return lang in ("html", "css", "javascript", "tsx", "typescript")
+    return lang in ("html", "css", "javascript", "tsx", "typescript", "vue", "svelte")
 
 
 def _is_html_like(file_info: Dict[str, Any]) -> bool:
     lang = file_info.get("language", "")
     path = file_info.get("path", "")
-    return lang in ("html", "tsx", "javascript") or path.endswith((".html", ".htm", ".tsx", ".jsx"))
+    return lang in ("html", "tsx", "javascript", "vue", "svelte") or \
+        path.endswith((".html", ".htm", ".tsx", ".jsx", ".vue", ".svelte"))
 
 
 def _is_css(file_info: Dict[str, Any]) -> bool:
@@ -111,7 +121,7 @@ def format_html_semantics(conn: sqlite3.Connection, file_id: int) -> str:
     """Structured semantic output for HTML/JSX/TSX files.
 
     Returns a concise summary of components, markup elements, events,
-    bindings, and style relationships — not raw HTML.
+    bindings, and style relationships   not raw HTML.
     """
     file_info = _get_file(conn, file_id)
     if not file_info:
@@ -119,7 +129,7 @@ def format_html_semantics(conn: sqlite3.Connection, file_id: int) -> str:
 
     lines = [f'file "{file_info["path"]}" (frontend semantics):']
 
-    # 1. Components
+    # Components
     components = conn.execute(
         """SELECT c.id, c.name, c.framework, c.is_exported, c.source_range,
                   c.impl_function_id, c.impl_class_id
@@ -168,7 +178,7 @@ def format_html_semantics(conn: sqlite3.Connection, file_id: int) -> str:
                         tag_name = elem["tag_name"] if elem else "?"
                         lines.append(f"        - element <{tag_name}> [exact]")
 
-    # 2. Markup elements (summary)
+    # Markup elements (summary)
     elements = conn.execute(
         """SELECT m.id, m.tag_name, m.element_type, m.element_id_attr,
                   m.static_classes, m.is_conditional, m.is_repeated,
@@ -200,7 +210,7 @@ def format_html_semantics(conn: sqlite3.Connection, file_id: int) -> str:
             comp_ref = f" in {elem['component_id']}" if elem["component_id"] else ""
             lines.append(f"    - <{elem['tag_name']}>{id_str}{class_str}{cond}{rep} @ {_format_source_range(sr)}{comp_ref}")
 
-    # 3. Events
+    # Events
     events = conn.execute(
         """SELECT e.id, e.element_id, e.event_name, e.handler_type,
                   e.handler_expression, e.handler_symbol_id, e.resolution_status
@@ -225,7 +235,7 @@ def format_html_semantics(conn: sqlite3.Connection, file_id: int) -> str:
             tag = _relationship_tag(ev["resolution_status"])
             lines.append(f"    - {ev['event_name']} on {elem_desc} → {handler}{sym} [{tag}]")
 
-    # 4. Bindings
+    # Bindings
     bindings = conn.execute(
         """SELECT b.id, b.element_id, b.binding_type, b.binding_name,
                   b.binding_expression, b.resolution_status
@@ -248,7 +258,7 @@ def format_html_semantics(conn: sqlite3.Connection, file_id: int) -> str:
             tag = _relationship_tag(b["resolution_status"])
             lines.append(f"    - {b['binding_type']}:{b['binding_name']} on {elem_desc} = {b['binding_expression']} [{tag}]")
 
-    # 5. Style relationships (selectors defined in this file)
+    # Style relationships (selectors defined in this file)
     selectors = conn.execute(
         """SELECT s.id, s.selector_text, s.selector_type, s.is_scoped
            FROM style_selectors s
@@ -263,7 +273,7 @@ def format_html_semantics(conn: sqlite3.Connection, file_id: int) -> str:
             scoped = " (scoped)" if sel["is_scoped"] else ""
             lines.append(f"    - {sel['selector_text']} [{sel['selector_type']}]{scoped}")
 
-    # 6. Stylesheet imports
+    # Stylesheet imports
     imports = conn.execute(
         """SELECT si.import_path, si.is_external, si.resolved_file_id
            FROM style_imports si
@@ -283,7 +293,7 @@ def format_html_semantics(conn: sqlite3.Connection, file_id: int) -> str:
                 tag = "unresolved"
             lines.append(f"    - {imp['import_path']} [{tag}]")
 
-    # 7. Embedded scripts
+    # Embedded scripts
     scripts = conn.execute(
         """SELECT DISTINCT f2.id, f2.path
            FROM files f2
@@ -293,7 +303,7 @@ def format_html_semantics(conn: sqlite3.Connection, file_id: int) -> str:
     ).fetchall()
 
     # Check for inline scripts via diagnostics or other markers
-    # This is a simplified approach — in practice inline scripts are parsed
+    # This is a simplified approach   in practice inline scripts are parsed
     # as part of the HTML file's functions
     funcs = conn.execute(
         "SELECT id, name, type FROM functions WHERE file_id = ? ORDER BY id",
@@ -318,7 +328,7 @@ def format_css_semantics(conn: sqlite3.Connection, file_id: int) -> str:
     """Structured semantic output for CSS files.
 
     Returns selectors, custom properties, keyframes, imports, and
-    selector usages — not raw CSS.
+    selector usages   not raw CSS.
     """
     file_info = _get_file(conn, file_id)
     if not file_info:
@@ -694,12 +704,22 @@ def format_file_semantics(conn: sqlite3.Connection, file_path: str) -> Optional[
     """Format semantic output for a file by path.
 
     Returns None if the file is not a frontend file or not found.
+    Plain .ts/.js files with no frontend entities fall back to the classic
+    dependency-graph output instead of an empty frontend report.
     """
-    file_info = _get_file_by_path(conn, file_path)
-    if not file_info:
+    row, candidates = resolve_file_rows(conn, file_path)
+    if not row:
+        if candidates:
+            listing = "\n".join(f"  - {c}" for c in candidates)
+            return f"Error: Ambiguous file path '{file_path}' matches multiple indexed files:\n{listing}"
         return None
 
+    file_info = dict(row)
     if not _is_frontend_file(file_info):
+        return None
+
+    lang = file_info.get("language", "")
+    if lang in ("typescript", "javascript") and not _has_frontend_entities(conn, file_info["id"]):
         return None
 
     return format_frontend_overview(conn, file_info["id"])

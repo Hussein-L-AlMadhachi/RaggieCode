@@ -162,7 +162,7 @@ def _parse_element(node, source_bytes, parent=None, depth=0) -> Optional[ParsedE
         )
 
         if children_list is not None:
-            # This was a child being processed — add it to parent's children
+            # This was a child being processed   add it to parent's children
             children_list.append(elem)
 
         if root_elem[0] is None and ts_node == node:

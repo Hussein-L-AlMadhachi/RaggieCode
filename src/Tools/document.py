@@ -1,5 +1,5 @@
 from RAG.document import update_symbol_description, get_symbol_description
-from .utils import is_within_cwd, BLUE, RESET
+from .utils import is_within_cwd, prompt_path_permission, denial_content, BLUE, RESET
 
 
 def handle(arguments, toolcall_id):
@@ -11,11 +11,14 @@ def handle(arguments, toolcall_id):
 
     # Check if the file is outside the current working directory
     if file_path and not is_within_cwd(file_path):
-        return {
-            "role": "tool",
-            "tool_call_id": toolcall_id,
-            "content": "Error: access denied - path is outside the current working directory",
-        }
+        if not prompt_path_permission(
+            file_path, "document", "path is outside the current working directory"
+        ):
+            return {
+                "role": "tool",
+                "tool_call_id": toolcall_id,
+                "content": denial_content("Error: access denied - path is outside the current working directory"),
+            }
 
     try:
         if action == "read":

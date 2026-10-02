@@ -2,8 +2,16 @@ from .utils import BLUE, GREEN, YELLOW, RED, RESET
 
 
 def handle(arguments, toolcall_id):
-    """Ask the user a question, optionally with predefined options."""
-    from prompt_toolkit import prompt
+    """Ask the user a question, optionally with predefined options.
+
+    In terminal mode, uses prompt_toolkit multiline prompts (and flushes
+    stdin first)   the question itself is printed above. In headless mode
+    (ACP/stdio/web), the question text itself is passed to io_backend.ask
+    so protocol clients (which never see the terminal prints) display the
+    real question instead of a bare input hint. An empty answer is then
+    treated as "User skipped the question".
+    """
+    import io_backend
 
     question = arguments.get("question", "")
     options = arguments.get("options", [])
@@ -17,13 +25,25 @@ def handle(arguments, toolcall_id):
         }
 
     try:
-        print(f"\n{BLUE}Agent has a question:{RESET}")
-        print(f"{YELLOW}{question}{RESET}")
-        print()
+        headless = io_backend.get_mode() != io_backend.MODE_TERMINAL
+
+        if not headless:
+            # Terminal mode: the question is shown by the prints below.
+            print(f"\n{BLUE}Agent has a question:{RESET}")
+            print(f"{YELLOW}{question}{RESET}")
+            print()
 
         if not options:
             # Free-form question
-            user_input = prompt("Your answer: ", multiline=True).strip()
+            if headless:
+                # The question itself is the message: headless clients never
+                # see the terminal prints, so routing only a "Your answer:"
+                # hint would leave the UI showing options with no question.
+                user_input = io_backend.ask(question).strip()
+            else:
+                from prompt_toolkit import prompt
+                io_backend._flush_stdin()
+                user_input = prompt("Your answer: ", multiline=True).strip()
             print()
             return {
                 "role": "tool",
@@ -46,7 +66,16 @@ def handle(arguments, toolcall_id):
         else:
             hint = "Enter a number, or type your own answer"
 
-        user_input = prompt(f"{hint}: ", multiline=True).strip()
+        if headless:
+            # Pass the question (not the numbered-choice hint) so headless
+            # clients can render it above the clickable options.
+            user_input = io_backend.ask(
+                question, options=options, allow_multiple=allow_multiple
+            ).strip()
+        else:
+            from prompt_toolkit import prompt
+            io_backend._flush_stdin()
+            user_input = prompt(f"{hint}: ", multiline=True).strip()
         print()
 
         if not user_input:

@@ -12,7 +12,7 @@ from typing import List, Dict, Optional, Any, Union
 from dataclasses import asdict
 
 from indexing.models import (
-    Function, Class, File, Dependency,
+    Function, Class, File, Dependency, Location,
 )
 from indexing.queries import QueryMixin, DescriptionMixin
 
@@ -124,8 +124,15 @@ class CodeIndexSDK(QueryMixin, DescriptionMixin):
             'type_aliases': [asdict(t) for t in self.search_type_aliases(pattern)]
         }
 
+    _SEARCH_TABLES = [
+        ('functions', 'function'), ('classes', 'class'), ('variables', 'variable'),
+        ('interfaces', 'interface'), ('type_aliases', 'type_alias'),
+        ('structs', 'struct'), ('enums', 'enum'),
+    ]
+
     def search_symbols(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """Search for symbols across functions, classes, and variables by name and description.
+        """Search for symbols across functions, classes, variables, and type declarations
+        by name and description.
 
         Uses SQL LIKE for substring matching on both name and description fields.
         Results are ranked: exact name matches first, then partial name matches,
@@ -143,7 +150,7 @@ class CodeIndexSDK(QueryMixin, DescriptionMixin):
         results = []
 
         # Exact name matches (highest priority)
-        for table, label in [('functions', 'function'), ('classes', 'class'), ('variables', 'variable')]:
+        for table, label in self._SEARCH_TABLES:
             cursor.execute(
                 f"SELECT name, file_id, description FROM {table} WHERE name = ? LIMIT ?",
                 (query, limit)
@@ -161,7 +168,7 @@ class CodeIndexSDK(QueryMixin, DescriptionMixin):
                     })
 
         # Partial name matches
-        for table, label in [('functions', 'function'), ('classes', 'class'), ('variables', 'variable')]:
+        for table, label in self._SEARCH_TABLES:
             cursor.execute(
                 f"SELECT name, file_id, description FROM {table} WHERE name LIKE ? AND name != ? LIMIT ?",
                 (like_pattern, query, limit)
@@ -179,7 +186,7 @@ class CodeIndexSDK(QueryMixin, DescriptionMixin):
                     })
 
         # Description matches (lower priority)
-        for table, label in [('functions', 'function'), ('classes', 'class'), ('variables', 'variable')]:
+        for table, label in self._SEARCH_TABLES:
             cursor.execute(
                 f"SELECT name, file_id, description FROM {table} WHERE description LIKE ? AND name NOT LIKE ? LIMIT ?",
                 (like_pattern, like_pattern, limit)
@@ -245,14 +252,14 @@ class CodeIndexSDK(QueryMixin, DescriptionMixin):
 
         for method in methods:
             params_str = self._format_parameters(method.parameters)
-            desc_annotation = f"  # {method.description}" if method.description else ""
+            desc_annotation = self._location_annotation(method.location, method.description)
             lines.append(f'{method_indent}- method {method.name}({params_str}){desc_annotation}:')
             deps = self.get_function_dependencies_grouped(method.id)
             self._render_callable_deps(lines, deps, method_indent + '     ')
 
         for var in class_vars:
             type_suffix = f" : {var.field_type}" if var.field_type else ""
-            desc_annotation = f"  # {var.description}" if var.description else ""
+            desc_annotation = self._location_annotation(var.location, var.description)
             lines.append(f'{method_indent}- variable {var.name}{type_suffix}{desc_annotation}')
 
     def _render_nested_classes(self, lines: List[str], func: 'Function', file: 'File') -> None:
@@ -269,7 +276,7 @@ class CodeIndexSDK(QueryMixin, DescriptionMixin):
         lines.append('     contains:')
         for row in nested_rows:
             nested_cls = Class.from_row(row, file.path)
-            desc_annotation = f"  # {nested_cls.description}" if nested_cls.description else ""
+            desc_annotation = self._location_annotation(nested_cls.location, nested_cls.description)
             lines.append(f'       - class {nested_cls.name}{desc_annotation}:')
             lines.append(f'           members:')
             self._render_class_members(lines, nested_cls, '             ')
@@ -281,28 +288,23 @@ class CodeIndexSDK(QueryMixin, DescriptionMixin):
             file_path: Relative path to the file in the database
         
         Returns:
-            YAML-like formatted string showing the dependency graph
+            YAML-like formatted string showing the dependency graph.
+            Every entity line is annotated with its source location (# lines X-Y).
         """
-        normalized_path = file_path[2:] if file_path.startswith('./') else file_path
-        file = self.get_file_by_path(normalized_path)
-
+        file, candidates = self.resolve_file(file_path)
         if not file:
-            filename = Path(normalized_path).name
-            cursor = self.conn.cursor()
-            cursor.execute("SELECT * FROM files WHERE path LIKE ?", (f"%{filename}",))
-            row = cursor.fetchone()
-            if row:
-                file = File.from_row(row)
-
-        if not file:
+            if candidates:
+                listing = "\n".join(f"  - {c}" for c in candidates)
+                return f"Error: Ambiguous file path '{file_path}' matches multiple indexed files:\n{listing}"
             return f"Error: File not found in database: {file_path}"
 
-        lines = [f'file "{file_path}":']
+        indexed_path = file.path
+        lines = [f'file "{indexed_path}":']
 
         for func in self.get_file_functions(file.id):
             params_str = self._format_parameters(func.parameters)
-            desc_annotation = f"  # {func.description}" if func.description else ""
-            lines.append(f'  - function {func.name}({params_str}) in file "{file_path}"{desc_annotation}')
+            desc_annotation = self._location_annotation(func.location, func.description)
+            lines.append(f'  - function {func.name}({params_str}) in file "{indexed_path}"{desc_annotation}')
             deps = self.get_function_dependencies_grouped(func.id)
             self._render_callable_deps(lines, deps, '     ')
             self._render_nested_classes(lines, func, file)
@@ -313,21 +315,38 @@ class CodeIndexSDK(QueryMixin, DescriptionMixin):
                 continue
             seen_vars.add(var.name)
             type_suffix = f" : {var.field_type}" if var.field_type else ""
-            desc_annotation = f"  # {var.description}" if var.description else ""
-            lines.append(f'  - variable {var.name}{type_suffix} in file "{file_path}"{desc_annotation}')
+            desc_annotation = self._location_annotation(var.location, var.description)
+            lines.append(f'  - variable {var.name}{type_suffix} in file "{indexed_path}"{desc_annotation}')
 
         for imp in self.get_file_imports(file.id):
-            lines.append(f'  - imported {imp.name} in file "{file_path}"')
+            lines.append(f'  - imported {imp.name} in file "{indexed_path}"{self._location_annotation(imp.location, None)}')
 
         for ns in self.get_file_namespaces(file.id):
-            lines.append(f'  - namespace {ns.name} in file "{file_path}"')
+            desc_annotation = self._location_annotation(ns.location, ns.description)
+            lines.append(f'  - namespace {ns.name} in file "{indexed_path}"{desc_annotation}')
 
         for cls in self.get_file_classes(file.id):
-            desc_annotation = f"  # {cls.description}" if cls.description else ""
+            desc_annotation = self._location_annotation(cls.location, cls.description)
             ns_annotation = f"  # namespace: {cls.namespace}" if cls.namespace else ""
-            lines.append(f'  - class {cls.name} in file "{file_path}"{desc_annotation}{ns_annotation}:')
+            lines.append(f'  - class {cls.name} in file "{indexed_path}"{desc_annotation}{ns_annotation}:')
             lines.append(f'      members:')
             self._render_class_members(lines, cls, '        ')
+
+        for iface in self.get_interfaces(file.id):
+            desc_annotation = self._location_annotation(iface.location, iface.description)
+            lines.append(f'  - interface {iface.name} in file "{indexed_path}"{desc_annotation}')
+
+        for alias in self.get_type_aliases(file.id):
+            desc_annotation = self._location_annotation(alias.location, alias.description)
+            lines.append(f'  - type {alias.name} in file "{indexed_path}"{desc_annotation}')
+
+        for struct in self.get_structs(file.id):
+            desc_annotation = self._location_annotation(struct.location, struct.description)
+            lines.append(f'  - struct {struct.name} in file "{indexed_path}"{desc_annotation}')
+
+        for enum in self.get_enums(file.id):
+            desc_annotation = self._location_annotation(enum.location, enum.description)
+            lines.append(f'  - enum {enum.name} in file "{indexed_path}"{desc_annotation}')
 
         return '\n'.join(lines)
     
@@ -427,6 +446,24 @@ class CodeIndexSDK(QueryMixin, DescriptionMixin):
         
         return ', '.join(param_strs)
 
+    @staticmethod
+    def _location_annotation(location: Optional[Location], description: Optional[str]) -> str:
+        """Build a '  # lines X-Y' annotation, optionally combined with a description.
+
+        Line numbers are 1-indexed, inclusive   matching _read_source_lines.
+        """
+        parts: List[str] = []
+        if location is not None and location.start_line is not None:
+            start = location.start_line
+            end = location.end_line
+            if end is not None and end != start:
+                parts.append(f"lines {start}-{end}")
+            else:
+                parts.append(f"line {start}")
+        if description:
+            parts.append(description)
+        return f"  # {' | '.join(parts)}" if parts else ""
+
     # ==================== Source Body Reading ====================
 
     def _read_source_lines(self, file_id: int, start_line: int, end_line: int) -> Optional[str]:
@@ -456,28 +493,31 @@ class CodeIndexSDK(QueryMixin, DescriptionMixin):
 
         return '\n'.join(lines[start_line - 1:end_line])
 
+    def _resolve_file_id_filter(self, file_path: Optional[str]) -> Optional[int]:
+        """Resolve a user-supplied file path (absolute or relative) to a file_id filter, or None."""
+        if not file_path:
+            return None
+        f, _ = self.resolve_file(file_path)
+        return f.id if f else None
+
     def get_function_body(self, function_name: str, file_path: Optional[str] = None) -> Optional[str]:
         """Get the source body of a function or method by name.
-        
+
         Args:
             function_name: Name of the function/method.
             file_path: Optional relative file path to disambiguate same-name functions.
-        
+
         Returns:
             Source code string with description, or None if not found / file unresolvable.
         """
-        file_id = None
-        if file_path:
-            f = self.get_file_by_path(file_path)
-            if f:
-                file_id = f.id
+        file_id = self._resolve_file_id_filter(file_path)
 
         matches = self.get_function_by_name(function_name, file_id)
         if not matches:
             return None
 
         # Prefer implementations (methods inside classes) over interface declarations
-        # Interface declarations are standalone functions with no body — implementations
+        # Interface declarations are standalone functions with no body   implementations
         # have parent_type='class' and contain actual code
         func = matches[0]
         if len(matches) > 1:
@@ -515,7 +555,7 @@ class CodeIndexSDK(QueryMixin, DescriptionMixin):
         """
         file_id = None
         if file_path:
-            f = self.get_file_by_path(file_path)
+            f, _ = self.resolve_file(file_path)
             if f:
                 file_id = f.id
 
@@ -804,6 +844,25 @@ class CodeIndexSDK(QueryMixin, DescriptionMixin):
         
         return ""
 
+    def get_variable_body(self, variable_name: str, file_path: Optional[str] = None) -> Optional[str]:
+        """Get the declaration source lines of a variable by name.
+
+        Args:
+            variable_name: Name of the variable.
+            file_path: Optional relative file path to disambiguate same-name variables.
+
+        Returns:
+            Source code string of the declaration, or None if not found / file unresolvable.
+        """
+        file_id = self._resolve_file_id_filter(file_path)
+
+        matches = self.get_variable_by_name(variable_name, file_id)
+        if not matches:
+            return None
+
+        var = matches[0]
+        return self._read_source_lines(var.file_id, var.location.start_line, var.location.end_line)
+
     def get_class_body(self, class_name: str, file_path: Optional[str] = None) -> Optional[str]:
         """Get the source body of a class by name.
         
@@ -814,11 +873,7 @@ class CodeIndexSDK(QueryMixin, DescriptionMixin):
         Returns:
             Source code string with description, or None if not found / file unresolvable.
         """
-        file_id = None
-        if file_path:
-            f = self.get_file_by_path(file_path)
-            if f:
-                file_id = f.id
+        file_id = self._resolve_file_id_filter(file_path)
 
         matches = self.get_class_by_name(class_name, file_id)
         if not matches:
@@ -830,3 +885,22 @@ class CodeIndexSDK(QueryMixin, DescriptionMixin):
         if cls.description:
             return f"# Description: {cls.description}\n\n{body}"
         return body
+
+    def get_type_body(self, symbol_name: str, file_path: Optional[str] = None) -> Optional[str]:
+        """Get the source body of a type-level declaration (interface, type alias, enum, struct).
+
+        Args:
+            symbol_name: Name of the type declaration.
+            file_path: Optional file path (absolute or relative) to disambiguate.
+
+        Returns:
+            Source code string of the declaration, or None if not found.
+        """
+        file_id = self._resolve_file_id_filter(file_path)
+        for getter in (self.get_interface_by_name, self.get_type_alias_by_name,
+                       self.get_enum_by_name, self.get_struct_by_name):
+            matches = getter(symbol_name, file_id)
+            if matches:
+                decl = matches[0]
+                return self._read_source_lines(decl.file_id, decl.location.start_line, decl.location.end_line)
+        return None

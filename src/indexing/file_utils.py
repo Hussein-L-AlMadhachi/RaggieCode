@@ -6,8 +6,7 @@ import os
 from pathlib import Path
 from indexing.language_config import get_language_for_extension, get_extensions_for_languages
 from indexing.frontend_config import load_frontend_config
-from pathspec import PathSpec
-from pathspec.patterns import GitWildMatchPattern
+from pathspec import GitIgnoreSpec
 
 
 def detect_language(file_path):
@@ -21,6 +20,9 @@ def load_ignore_patterns(root_dir):
     If .aiignore exists in the root directory, its patterns are used to
     exclude files from indexing. If .aiignore does not exist, .gitignore
     is used as a fallback.
+
+    Uses GitIgnoreSpec, which replicates Git's actual gitignore behavior
+    (including re-including files from excluded directories).
     """
     root_path = Path(root_dir)
     aiignore_path = root_path / '.aiignore'
@@ -33,12 +35,12 @@ def load_ignore_patterns(root_dir):
         ignore_path = gitignore_path
 
     if ignore_path is None:
-        return PathSpec.from_lines(GitWildMatchPattern, [])
+        return GitIgnoreSpec.from_lines([])
 
     with open(ignore_path, 'r', encoding='utf-8') as f:
         patterns = f.read().splitlines()
 
-    return PathSpec.from_lines(GitWildMatchPattern, patterns)
+    return GitIgnoreSpec.from_lines(patterns)
 
 
 def collect_files_to_index(root_dir, languages, exclude_dirs=None):

@@ -34,7 +34,7 @@ def normalize_import_path(import_path: str, source_file_path: str, root_dir: str
         Normalized project-relative path (e.g. "src/components/Button.tsx").
         For external URLs (http://, https://, //), returns the original path unchanged.
     """
-    # External URLs — return as-is
+    # External URLs   return as-is
     if import_path.startswith(("http://", "https://", "//")):
         return import_path
 
@@ -46,13 +46,13 @@ def normalize_import_path(import_path: str, source_file_path: str, root_dir: str
         aliases = load_path_aliases(root_dir)
     resolved = resolve_path_alias(import_path, aliases, root_dir)
     if resolved != import_path:
-        # Alias was applied — resolve relative to root
+        # Alias was applied   resolve relative to root
         candidate = root / resolved
     elif import_path.startswith("/"):
         # Root-relative path
         candidate = root / import_path.lstrip("/")
     else:
-        # Relative path — resolve against source file directory
+        # Relative path   resolve against source file directory
         candidate = (source_dir / import_path).resolve()
 
     # Try to infer extension if the path doesn't exist as-is
@@ -63,7 +63,7 @@ def normalize_import_path(import_path: str, source_file_path: str, root_dir: str
     try:
         return str(candidate.relative_to(root))
     except ValueError:
-        # Path is outside root — return best-effort normalized
+        # Path is outside root   return best-effort normalized
         return str(candidate)
 
 
@@ -90,7 +90,7 @@ def infer_extension_path(base_path: Path) -> Path:
                     return index_file
         return base_path
 
-    # No extension — try each candidate
+    # No extension   try each candidate
     for ext in CANDIDATE_EXTENSIONS:
         candidate = base_path.with_suffix(ext)
         if candidate.exists():
@@ -215,7 +215,7 @@ class FrontendResolver:
         2. style_imports.resolved_file_id by path lookup
         3. style_custom_property_usages.resolved_property_id by name lookup
         4. frontend_events.handler_symbol_id by expression lookup
-        5. style_selector_matches — recompute from selectors and elements
+        5. style_selector_matches   recompute from selectors and elements
         """
         self._resolve_render_relationships()
         self._resolve_style_imports()
@@ -358,128 +358,113 @@ class FrontendResolver:
     def _resolve_selector_matches(self):
         """Recompute style_selector_matches from selectors and elements.
 
-        Clears all existing matches and recomputes them by matching selectors
-        against markup elements across all files.
+        Clears all existing matches and recomputes them entirely in SQL:
+        matching runs as JOINs over the normalized markup_element_classes /
+        style_selector_parts tables, scoped to files that actually import each
+        stylesheet (plus same-file matches) instead of a repo-wide cross-product.
 
-        Optimized: pre-decodes element JSON once, groups selectors by type to
-        reduce cross-product work, and batch-inserts results.
+        Selector types other than class/id/tag/compound (combinator, descendant,
+        attribute, pseudo, at-rule, unknown) can never match under the indexer's
+        matching semantics, so they are not queried at all.
         """
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM style_selector_matches")
 
+        # Build the scope relation: (selector_file_id, element_file_id) pairs
+        # where the selector file's styles apply to the element file.
+        cursor.execute("DROP TABLE IF EXISTS _match_scope")
         cursor.execute(
-            "SELECT ss.id, ss.selector_text, ss.selector_type "
-            "FROM style_selectors ss"
+            """CREATE TEMP TABLE _match_scope (
+                 selector_file_id INTEGER NOT NULL,
+                 element_file_id INTEGER NOT NULL,
+                 PRIMARY KEY (selector_file_id, element_file_id)
+               )"""
         )
-        selectors = cursor.fetchall()
-
+        # Same-file pairs (inline <style>, scoped SFC/TSX styles)
         cursor.execute(
-            "SELECT me.id, me.tag_name, me.element_id_attr, me.static_classes "
-            "FROM markup_elements me "
-            "WHERE me.element_type IN ('element', 'custom_component', 'native')"
+            "INSERT OR IGNORE INTO _match_scope "
+            "SELECT DISTINCT file_id, file_id FROM style_selectors"
         )
-        elements = cursor.fetchall()
-
-        # Pre-decode static_classes JSON once per element
-        decoded_elements = []
-        for elem_id, tag_name, elem_id_attr, static_classes in elements:
-            classes = json.loads(static_classes) if static_classes else []
-            decoded_elements.append((elem_id, tag_name, elem_id_attr, classes))
-
-        # Group selectors by type for targeted matching
-        selectors_by_type = {}
-        for sel_id, sel_text, sel_type in selectors:
-            selectors_by_type.setdefault(sel_type, []).append((sel_id, sel_text))
-
-        # Build lookup indexes from elements
-        elements_by_tag = {}
-        elements_by_id_attr = {}
-        elements_by_class = {}
-        for elem_id, tag_name, elem_id_attr, classes in decoded_elements:
-            tag_lower = tag_name.lower()
-            elements_by_tag.setdefault(tag_lower, []).append(elem_id)
-            if elem_id_attr:
-                elements_by_id_attr.setdefault(elem_id_attr, []).append(elem_id)
-            for cls in classes:
-                elements_by_class.setdefault(cls, []).append(elem_id)
-
-        batch = []
-        # Match class selectors using class index
-        for sel_id, sel_text in selectors_by_type.get("class", []):
-            target_class = sel_text.lstrip(".")
-            matched_ids = elements_by_class.get(target_class, [])
-            for elem_id in matched_ids:
-                batch.append((sel_id, elem_id, 'static', 'high'))
-
-        # Match id selectors using id index
-        for sel_id, sel_text in selectors_by_type.get("id", []):
-            target_id = sel_text.lstrip("#")
-            matched_ids = elements_by_id_attr.get(target_id, [])
-            for elem_id in matched_ids:
-                batch.append((sel_id, elem_id, 'static', 'high'))
-
-        # Match tag selectors using tag index
-        for sel_id, sel_text in selectors_by_type.get("tag", []):
-            tag_lower = sel_text.lower()
-            matched_ids = elements_by_tag.get(tag_lower, [])
-            for elem_id in matched_ids:
-                batch.append((sel_id, elem_id, 'static', 'high'))
-
-        # Match compound selectors (still requires cross-product but only for compound selectors)
-        compound_selectors = selectors_by_type.get("compound", [])
-        if compound_selectors:
-            for sel_id, sel_text in compound_selectors:
-                for elem_id, tag_name, elem_id_attr, classes in decoded_elements:
-                    if self._selector_matches_element(sel_text, "compound", tag_name, elem_id_attr, classes):
-                        batch.append((sel_id, elem_id, 'static', 'high'))
-
-        # Match any remaining selector types with full cross-product
-        remaining_types = set(selectors_by_type.keys()) - {"class", "id", "tag", "compound"}
-        if remaining_types:
-            for sel_type in remaining_types:
-                for sel_id, sel_text in selectors_by_type[sel_type]:
-                    for elem_id, tag_name, elem_id_attr, classes in decoded_elements:
-                        if self._selector_matches_element(sel_text, sel_type, tag_name, elem_id_attr, classes):
-                            batch.append((sel_id, elem_id, 'static', 'high'))
-
-        # Batch insert all matches
-        if batch:
-            cursor.executemany(
-                "INSERT INTO style_selector_matches (selector_id, element_id, match_type, confidence) "
-                "VALUES (?, ?, ?, ?)",
-                batch
+        # Direct import edges: markup file M imports stylesheet S
+        cursor.execute(
+            "INSERT OR IGNORE INTO _match_scope "
+            "SELECT si.resolved_file_id, si.file_id FROM style_imports si "
+            "WHERE si.resolved_file_id IS NOT NULL AND si.is_external = 0"
+        )
+        # Transitive widening over @import chains: if S applies to M and
+        # S imports S2, then S2 also applies to M. Iterative fixpoint
+        # (bounded; cycles terminate via INSERT OR IGNORE).
+        for _ in range(10):
+            cursor.execute(
+                """INSERT OR IGNORE INTO _match_scope
+                   SELECT si.resolved_file_id, ms.element_file_id
+                   FROM _match_scope ms
+                   JOIN style_imports si ON si.file_id = ms.selector_file_id
+                   WHERE si.resolved_file_id IS NOT NULL AND si.is_external = 0"""
             )
+            if cursor.rowcount == 0:
+                break
 
-    @staticmethod
-    def _selector_matches_element(selector_text, selector_type, tag_name, elem_id_attr, static_classes):
-        """Check if a CSS selector matches a markup element.
+        elem_filter = "me.element_type IN ('element', 'custom_component', 'native')"
 
-        static_classes can be a pre-decoded list or a JSON string.
-        """
-        if isinstance(static_classes, str):
-            classes = json.loads(static_classes) if static_classes else []
-        else:
-            classes = static_classes
+        # Class selectors: element must have the class.
+        # Drive from the scope pairs and probe markup_element_classes by
+        # (file_id, class_name)   probing by class alone would enumerate every
+        # matching element repo-wide (utility classes match thousands) only to
+        # discard nearly all of them on the scope check.
+        cursor.execute(
+            f"""INSERT INTO style_selector_matches (selector_id, element_id, match_type, confidence)
+                SELECT s.id, mec.element_id, 'static', 'high'
+                FROM _match_scope ms
+                JOIN style_selectors s ON s.file_id = ms.selector_file_id
+                JOIN markup_element_classes mec ON mec.file_id = ms.element_file_id
+                  AND mec.class_name = ltrim(s.selector_text, '.')
+                JOIN markup_elements me ON me.id = mec.element_id
+                WHERE s.selector_type = 'class' AND {elem_filter}"""
+        )
 
-        if selector_type == "class":
-            target_class = selector_text.lstrip(".")
-            return target_class in classes
-        elif selector_type == "id":
-            target_id = selector_text.lstrip("#")
-            return elem_id_attr == target_id
-        elif selector_type == "tag":
-            return tag_name.lower() == selector_text.lower()
-        elif selector_type == "compound":
-            parts = selector_text.replace(".", " .").replace("#", " #").split()
-            for part in parts:
-                if part.startswith("."):
-                    if part[1:] not in classes:
-                        return False
-                elif part.startswith("#"):
-                    if elem_id_attr != part[1:]:
-                        return False
-                else:
-                    if tag_name.lower() != part.lower():
-                        return False
-            return True
-        return False
+        # ID selectors: element id attribute must equal the selector id
+        cursor.execute(
+            f"""INSERT INTO style_selector_matches (selector_id, element_id, match_type, confidence)
+                SELECT s.id, me.id, 'static', 'high'
+                FROM style_selectors s
+                JOIN _match_scope ms ON ms.selector_file_id = s.file_id
+                JOIN markup_elements me ON me.file_id = ms.element_file_id
+                  AND me.element_id_attr = ltrim(s.selector_text, '#')
+                WHERE s.selector_type = 'id' AND {elem_filter}"""
+        )
+
+        # Tag selectors: element tag must equal the selector tag (ASCII case-insensitive)
+        cursor.execute(
+            f"""INSERT INTO style_selector_matches (selector_id, element_id, match_type, confidence)
+                SELECT s.id, me.id, 'static', 'high'
+                FROM style_selectors s
+                JOIN _match_scope ms ON ms.selector_file_id = s.file_id
+                JOIN markup_elements me ON me.file_id = ms.element_file_id
+                  AND me.tag_name = s.selector_text COLLATE NOCASE
+                WHERE s.selector_type = 'tag' AND {elem_filter}"""
+        )
+
+        # Compound selectors: element must satisfy EVERY part (relational
+        # division over style_selector_parts   no unsatisfied part may exist)
+        cursor.execute(
+            f"""INSERT INTO style_selector_matches (selector_id, element_id, match_type, confidence)
+                SELECT s.id, me.id, 'static', 'high'
+                FROM style_selectors s
+                JOIN _match_scope ms ON ms.selector_file_id = s.file_id
+                JOIN markup_elements me ON me.file_id = ms.element_file_id
+                WHERE s.selector_type = 'compound' AND {elem_filter}
+                  AND NOT EXISTS (
+                    SELECT 1 FROM style_selector_parts p
+                    WHERE p.selector_id = s.id
+                      AND NOT (
+                        (p.part_type = 'class' AND EXISTS (
+                            SELECT 1 FROM markup_element_classes mec
+                            WHERE mec.element_id = me.id AND mec.class_name = p.part_value))
+                        OR (p.part_type = 'id' AND me.element_id_attr = p.part_value)
+                        OR (p.part_type = 'tag' AND lower(me.tag_name) = p.part_value)
+                      )
+                  )"""
+        )
+
+        cursor.execute("DROP TABLE _match_scope")

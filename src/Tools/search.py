@@ -1,5 +1,5 @@
 from ripgrep_rs import search
-from .utils import is_within_cwd
+from .utils import is_within_cwd, prompt_path_permission, denial_content
 
 def handle(arguments, toolcall_id, parent_session_id=None):
     search_term = arguments.get("search_term")
@@ -7,11 +7,14 @@ def handle(arguments, toolcall_id, parent_session_id=None):
 
     # Check if the directory is outside the current working directory
     if directory and not is_within_cwd(directory):
-        return {
-            "role": "tool",
-            "tool_call_id": toolcall_id,
-            "content": "Error: access denied - path is outside the current working directory",
-        }
+        if not prompt_path_permission(
+            directory, "search", "path is outside the current working directory"
+        ):
+            return {
+                "role": "tool",
+                "tool_call_id": toolcall_id,
+                "content": denial_content("Error: access denied - path is outside the current working directory"),
+            }
     
     print(f"Searching for '{search_term}' in '{directory}'")
     

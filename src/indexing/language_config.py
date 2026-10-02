@@ -107,6 +107,20 @@ try:
 except ImportError:
     css_language = None
 
+try:
+    from tree_sitter_language_pack import get_language as vue_language_pack
+
+    vue_language = vue_language_pack("vue")
+except ImportError:
+    vue_language = None
+
+try:
+    from tree_sitter_language_pack import get_language as svelte_language_pack
+
+    svelte_language = svelte_language_pack("svelte")
+except ImportError:
+    svelte_language = None
+
 
 LANGUAGE_CONFIG = {
     "python": {
@@ -319,6 +333,18 @@ LANGUAGE_CONFIG = {
             "import_statement": ["import_statement"],
             "keyframes_statement": ["keyframes_statement"],
         },
+    },
+    "vue": {
+        "extensions": [".vue"],
+        "language_module": vue_language,
+        # Parsed by the frontend SFC extractor, not generic symbol extraction
+        "node_types": {},
+    },
+    "svelte": {
+        "extensions": [".svelte"],
+        "language_module": svelte_language,
+        # Parsed by the frontend SFC extractor, not generic symbol extraction
+        "node_types": {},
     },
 }
 

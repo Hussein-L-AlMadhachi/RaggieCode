@@ -18,7 +18,7 @@ Resolution strategies (tried in priority order):
 
 All applicable strategies are run. Results are merged, deduplicated by
 entity ID, and sorted by confidence score (highest first). Ambiguity is
-never hidden — all plausible candidates are returned.
+never hidden   all plausible candidates are returned.
 """
 
 import json
@@ -286,7 +286,7 @@ def _try_component_ancestry(conn, meta: dict) -> List[ResolutionCandidate]:
             (current_id, name)
         ).fetchone()
         if not children:
-            # Ancestry doesn't match — try without name match (fuzzy)
+            # Ancestry doesn't match   try without name match (fuzzy)
             return []
         current_id = children["child_component_id"]
 
@@ -436,7 +436,7 @@ def _try_text_content(conn, meta: dict, project_root: str = None) -> List[Resolu
         return []
 
     # Text nodes are stored as element_type='text' but the actual text content
-    # is not stored in the DB — we need to read it from the source file using
+    # is not stored in the DB   we need to read it from the source file using
     # the element's source_range.
     rows = conn.execute(
         """SELECT m.*, f.path as file_path
@@ -788,7 +788,7 @@ def _build_ambiguity_explanation(candidates: List[ResolutionCandidate]) -> Optio
 def resolve_runtime_element(
     conn: sqlite3.Connection,
     metadata: Dict[str, Any],
-    project_root: str = None,
+    project_root: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Resolve browser/runtime element metadata to source semantic entities.
 

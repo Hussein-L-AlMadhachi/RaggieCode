@@ -1,7 +1,7 @@
 import os
 
 from RAG.find import find_symbol_location, find_frontend_entity_location
-from .utils import is_ignored_by_gitignore, is_within_cwd, BLUE, RESET, auto_record_change, reindex_after_change
+from .utils import is_ignored_by_gitignore, is_within_cwd, prompt_path_permission, denial_content, BLUE, RESET, auto_record_change, reindex_after_change
 
 # Frontend entity types that can be edited via edit_safety
 _FRONTEND_ENTITY_TYPES = {
@@ -11,11 +11,22 @@ _FRONTEND_ENTITY_TYPES = {
 
 
 def handle(arguments, toolcall_id, session_id=None, code_indexer=None):
-    symbol_name = arguments["symbol_name"]
+    symbol_name = arguments.get("symbol_name")
     file_path = arguments.get("file_path")
     new_source = arguments.get("new_source")
     entity_type = arguments.get("entity_type")
     entity_id = arguments.get("entity_id")
+
+    if not symbol_name:
+        return {
+            "role": "tool",
+            "tool_call_id": toolcall_id,
+            "content": (
+                "Error: 'symbol_name' is required. Pass the exact name of the "
+                "function, method, or class to replace (use GetFileCodeSemantics "
+                "to find it). The full new_source must also be provided."
+            ),
+        }
 
     print(f"{BLUE}EditSymbol {symbol_name}{RESET}")
 
@@ -56,21 +67,27 @@ def handle(arguments, toolcall_id, session_id=None, code_indexer=None):
 
         # Security checks
         if not is_within_cwd(resolved_path):
-            return {
-                "role": "tool",
-                "tool_call_id": toolcall_id,
-                "content": "Error: access denied - path is outside the current working directory",
-            }
+            if not prompt_path_permission(
+                resolved_path, "edit", "path is outside the current working directory"
+            ):
+                return {
+                    "role": "tool",
+                    "tool_call_id": toolcall_id,
+                    "content": denial_content("Error: access denied - path is outside the current working directory"),
+                }
 
         if is_ignored_by_gitignore(resolved_path):
-            return {
-                "role": "tool",
-                "tool_call_id": toolcall_id,
-                "content": (
-                    f"Error: File '{resolved_path}' is in .gitignore. "
-                    "Operations on gitignored files are not allowed."
-                ),
-            }
+            if not prompt_path_permission(
+                resolved_path, "edit", "file is gitignored"
+            ):
+                return {
+                    "role": "tool",
+                    "tool_call_id": toolcall_id,
+                    "content": denial_content(
+                        f"Error: File '{resolved_path}' is in .gitignore. "
+                        "Operations on gitignored files are not allowed."
+                    ),
+                }
 
         if not os.path.exists(resolved_path):
             return {
@@ -154,8 +171,9 @@ def _handle_frontend_edit(entity_type, entity_id, new_source, file_path,
     """Handle editing of frontend semantic entities via edit_safety."""
     from pathlib import Path
     from indexing.frontend.edit_safety import validate_edit_range, apply_frontend_edit
+    from raggie_dirs import get_code_index_db_path
 
-    db_path = Path.cwd() / ".raggie" / ".code_index.raggie"
+    db_path = get_code_index_db_path()
     if not db_path.exists():
         return {
             "role": "tool",
@@ -189,21 +207,27 @@ def _handle_frontend_edit(entity_type, entity_id, new_source, file_path,
                     break
 
         if not is_within_cwd(resolved):
-            return {
-                "role": "tool",
-                "tool_call_id": toolcall_id,
-                "content": "Error: access denied - path is outside the current working directory",
-            }
+            if not prompt_path_permission(
+                resolved, "edit", "path is outside the current working directory"
+            ):
+                return {
+                    "role": "tool",
+                    "tool_call_id": toolcall_id,
+                    "content": denial_content("Error: access denied - path is outside the current working directory"),
+                }
 
         if is_ignored_by_gitignore(resolved):
-            return {
-                "role": "tool",
-                "tool_call_id": toolcall_id,
-                "content": (
-                    f"Error: File '{resolved}' is in .gitignore. "
-                    "Operations on gitignored files are not allowed."
-                ),
-            }
+            if not prompt_path_permission(
+                resolved, "edit", "file is gitignored"
+            ):
+                return {
+                    "role": "tool",
+                    "tool_call_id": toolcall_id,
+                    "content": denial_content(
+                        f"Error: File '{resolved}' is in .gitignore. "
+                        "Operations on gitignored files are not allowed."
+                    ),
+                }
 
         # Apply the edit
         result = apply_frontend_edit(conn, entity_type, entity_id, new_source, file_path)

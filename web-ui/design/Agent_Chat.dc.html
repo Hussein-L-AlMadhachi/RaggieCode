@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>body{margin:0;background:#dddddd;font-family:'IBM Plex Sans',sans-serif;color:#1e1e1e}a{color:#1e1e1e}a:hover{color:#555}textarea,input{font:inherit}</style>
+</helmet>
+<div style="display:flex;flex-wrap:wrap;gap:40px;padding:48px;align-items:flex-start">
+  <sc-for list="{{ panes }}" as="pane" hint-placeholder-count="5">
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;font-family:'IBM Plex Mono',monospace;font-size:11px;color:#6b6b6b;letter-spacing:.04em;text-transform:uppercase">
+        <span>{{ pane.label }}</span>
+        <button onClick="{{ pane.onReset }}" style="border:none;background:none;font:inherit;color:#6b6b6b;cursor:pointer;padding:0;text-decoration:underline">reset</button>
+      </div>
+      <div style="width:384px;height:700px;background:#fff;border:1px solid #1e1e1e;display:flex;flex-direction:column;box-sizing:border-box">
+        <sc-if value="{{ pane.isList }}">
+          <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:16px 22px 10px">
+              <div style="font-size:20px">All Chats</div>
+              <button onClick="{{ pane.onNew }}" style="height:22px;padding:0 12px;white-space:nowrap;flex-shrink:0;background:#1e1e1e;color:#fff;border:1px solid #1e1e1e;font-size:12.5px;cursor:pointer" style-hover="background:#3a3a3a">+</button>
+            </div>
+            <div style="flex:1;min-height:0;overflow-y:auto;border-top:1px solid #1e1e1e">
+              <sc-for list="{{ pane.chats }}" as="c" hint-placeholder-count="5">
+                <div onClick="{{ c.onOpen }}" style="display:flex;flex-direction:column;gap:6px;padding:14px 22px;border-bottom:1px solid #e9ecef;cursor:pointer" style-hover="background:#f6f6f4">
+                  <div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px">
+                    <span style="font-size:13.5px;font-weight:500">{{ c.title }}</span>
+                    <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:#868e96;flex-shrink:0">{{ c.time }}</span>
+                  </div>
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;line-height:15px;color:#555;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">{{ c.preview }}</div>
+                  <sc-if value="{{ c.hasStatus }}">
+                    <span style="align-self:flex-start;font-size:11px;padding:1px 7px;background:#ffec99;color:#f08c00;border:1px solid #f08c00">{{ c.status }}</span>
+                  </sc-if>
+                </div>
+              </sc-for>
+              <sc-if value="{{ pane.noResults }}">
+                <div style="padding:28px 22px;font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:#868e96">No chats match.</div>
+              </sc-if>
+              <sc-if value="{{ pane.hasMore }}">
+                <button onClick="{{ pane.onShowMore }}" style="display:block;width:100%;padding:12px 22px;background:none;border:none;border-top:1px solid #e9ecef;font-size:12.5px;color:#1e1e1e;cursor:pointer;text-align:center" style-hover="background:#f6f6f4">Show more</button>
+              </sc-if>
+              <sc-if value="{{ pane.allShown }}">
+                <a href="Chat History.dc.html" style="display:block;padding:14px 22px;font-size:12.5px;text-decoration:underline;text-align:center">View all chats</a>
+              </sc-if>
+            </div>
+          </div>
+        </sc-if>
+        <sc-if value="{{ pane.isChat }}">
+        <div style="flex:1;min-height:0;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 10px;border-bottom:1px solid #e9ecef">
+          <button onClick="{{ pane.onBack }}" style="height:21px;padding:0 8px 0 5px;white-space:nowrap;border:1px solid #1e1e1e;background:#e9ecef;color:#1e1e1e;font-size:12px;cursor:pointer;flex-shrink:0;display:flex;align-items:center;gap:4px" style-hover="background:#dee2e6"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square"><polyline points="7.5,2.5 4,6 7.5,9.5"></polyline></svg><span>chats</span></button>
+          <span style="flex:1;min-width:0;font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ pane.title }}</span>
+          <button onClick="{{ pane.onNew }}" title="New chat" style="width:24px;height:21px;border:1px solid #1e1e1e;background:#fff;font-size:14px;line-height:1;cursor:pointer;padding:0;flex-shrink:0" style-hover="background:#f1f1ef">+</button>
+        </div>
+        <sc-if value="{{ pane.isEmpty }}">
+          <div style="flex:1;display:flex;flex-direction:column;justify-content:center;gap:8px;padding:0 22px">
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:19px">New chat</div>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;line-height:16px;color:#555">Describe a task. The agent will ask before running commands.</div>
+          </div>
+        </sc-if>
+        <div ref="{{ pane.scrollRef }}" style="flex:1;min-height:0;overflow-y:auto;padding:28px 22px 12px;display:flex;flex-direction:column;gap:22px">
+          <sc-for list="{{ pane.msgs }}" as="m" hint-placeholder-count="2">
+            <sc-if value="{{ m.isUser }}">
+              <div style="align-self:flex-end;max-width:214px;background:#868e96;color:#fff;font-size:12.5px;line-height:16px;padding:9px 10px;text-wrap:pretty">{{ m.text }}</div>
+            </sc-if>
+            <sc-if value="{{ m.isAgent }}">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;line-height:16px;color:#1e1e1e;white-space:pre-wrap;text-wrap:pretty">{{ m.text }}</div>
+            </sc-if>
+          </sc-for>
+        </div>
+        <div style="padding:0 10px">
+          <sc-if value="{{ pane.isAsk }}">
+            <div style="border:1px solid #1e1e1e;display:flex;flex-direction:column">
+              <div style="padding:16px 12px 8px;font-family:'IBM Plex Mono',monospace;font-size:19px">What should we do?</div>
+              <div style="display:flex;flex-direction:column;gap:4px;padding:6px 8px 14px">
+                <sc-for list="{{ pane.options }}" as="o" hint-placeholder-count="2">
+                  <div onClick="{{ o.onPick }}" style="display:grid;grid-template-columns:22px 1fr;padding:6px 6px;cursor:pointer;background:{{ o.bg }};font-family:'IBM Plex Mono',monospace;font-size:11.5px;line-height:16px" style-hover="background:#f1f1ef">
+                    <span>{{ o.num }}.</span>
+                    <span style="text-wrap:pretty"><span style="font-weight:500">{{ o.title }}</span> {{ o.desc }}</span>
+                  </div>
+                </sc-for>
+              </div>
+              <input value="{{ pane.answer }}" onChange="{{ pane.onAnswer }}" onKeyDown="{{ pane.onKey }}" placeholder="Type a number or your own answer" style="border:none;border-top:1px solid #1e1e1e;padding:10px 12px;font-size:14px;outline:none;background:#fff">
+            </div>
+          </sc-if>
+          <sc-if value="{{ pane.isCompose }}">
+            <textarea value="{{ pane.draft }}" onChange="{{ pane.onDraft }}" onKeyDown="{{ pane.onKey }}" placeholder="Message the agent…" style="display:block;width:100%;box-sizing:border-box;height:112px;border:1px solid #1e1e1e;padding:12px 13px;font-size:12px;line-height:16px;resize:none;outline:none"></textarea>
+          </sc-if>
+          <sc-if value="{{ pane.isPerm }}">
+            <div style="border:1px solid #1e1e1e;padding:18px 20px 22px;display:flex;flex-direction:column;gap:16px">
+              <div style="font-size:20px">Agent wants to run:</div>
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;line-height:16px;background:#f6f6f4;padding:8px 8px;word-break:break-all">python3 -c "import ast; ast.parse(open('src/Tools/ask_user.py').read()); print('syntax OK')"</div>
+              <div style="display:flex;gap:16px;margin-top:10px">
+                <button onClick="{{ pane.onYes }}" style="width:70px;height:22px;background:#1e1e1e;color:#fff;border:1px solid #1e1e1e;font-size:12.5px;cursor:pointer" style-hover="background:#3a3a3a">yes</button>
+                <button onClick="{{ pane.onAlways }}" style="width:70px;height:22px;background:#ffec99;color:#f08c00;border:1px solid #f08c00;font-size:12.5px;cursor:pointer" style-hover="background:#ffe066">always</button>
+                <button onClick="{{ pane.onNo }}" style="width:70px;height:22px;background:#e9ecef;color:#1e1e1e;border:1px solid #1e1e1e;font-size:12.5px;cursor:pointer" style-hover="background:#f1f1ef">no</button>
+              </div>
+            </div>
+          </sc-if>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px 10px">
+          <button style="width:24px;height:19px;border:1px solid #1e1e1e;background:#fff;font-family:'IBM Plex Mono',monospace;font-size:12px;cursor:pointer;padding:0" style-hover="background:#f1f1ef">/</button>
+          <button onClick="{{ pane.onSend }}" disabled="{{ pane.sendDisabled }}" style="width:68px;height:21px;border:1px solid {{ pane.sendBorder }};background:{{ pane.sendBg }};color:{{ pane.sendColor }};font-size:12.5px;cursor:{{ pane.sendCursor }}">send</button>
+        </div>
+        </div>
+        </sc-if>
+      </div>
+    </div>
+  </sc-for>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+const USER = "Can you add an ask_user tool so the agent can stop and ask me a question mid-task instead of guessing?";
+const A1 = "Sure. I'll add src/Tools/ask_user.py, which pauses the run, shows a question in this panel, and resumes with your answer as the tool result.\n\nBefore I wire it into the loop, one decision on how answers come back.";
+const A2 = "Done. ask_user.py now registers with the tool router and blocks until the panel returns an answer. Numbered options map to indices; free text is passed through as-is.\n\nI also added a timeout (default 10 min) so an unattended run doesn't hang forever. Next step is a quick syntax check before running the test suite.";
+const OPTIONS = [
+  { title: "Structured options.", desc: "The agent always offers numbered choices; you reply with a number. Easier to parse, less flexible." },
+  { title: "Options + free text.", desc: "Show numbered choices but accept any typed answer. More flexible; the agent handles parsing." },
+];
+const MAIN = "Add ask_user tool";
+const CHATS = [
+  { title: MAIN, time: "now", status: "waiting for you", mode: "ask", msgs: [["u", USER], ["a", A1]] },
+  { title: "Flaky test in test_router.py", time: "2h", mode: "compose", msgs: [["u", "test_router_timeout fails about 1 in 5 runs on CI. Can you find out why?"], ["a", "The test sleeps 0.1s and asserts the router has already timed out, but the timeout is also 0.1s, so it's a race.\n\nI switched it to a fake clock. 50 local runs, 0 failures."]] },
+  { title: "Rename Tools/ to tools/", time: "yesterday", status: "needs permission", mode: "perm", msgs: [["u", "Rename src/Tools to src/tools and fix the imports."], ["a", "Renamed the folder and updated 14 imports. I'd like to run a syntax check before committing."]] },
+  { title: "Draft README for the CLI", time: "Mon", mode: "compose", msgs: [["u", "Write a short README for the CLI: install, usage, config."], ["a", "Drafted README.md with three sections: Install, Usage and Config. Usage includes the three most common commands with examples."]] },
+  { title: "Profile slow startup", time: "Sep 14", mode: "compose", msgs: [["u", "Startup takes ~2s. Where is the time going?"], ["a", "1.4s of it is importing pandas at module level in src/report.py. Moving that import into the function brings startup to 0.5s."]] },
+];
+const PAGE_SIZE = 3;
+const init = () => [
+  { label: "00 · Chats", mode: "list", title: "", query: "", answer: "", draft: "", msgs: [], visible: PAGE_SIZE },
+  { label: "01 · Agent asks", title: MAIN, mode: "ask", answer: "2", draft: "", msgs: [["u", USER], ["a", A1]] },
+  { label: "02 · Compose", title: MAIN, mode: "compose", answer: "", draft: "Go with option 2. Also make sure it times out if nobody answers.", msgs: [["u", USER], ["a", A1 + "\n\n" + A2]] },
+  { label: "03 · Permission", title: MAIN, mode: "perm", answer: "", draft: "", msgs: [["u", USER], ["a", A1 + "\n\n" + A2]] },
+  { label: "04 · Permission (sent disabled)", title: MAIN, mode: "perm", answer: "", draft: "", msgs: [["u", USER], ["a", A1 + "\n\n" + A2]] },
+];
+class Component extends DCLogic {
+  state = { panes: init() };
+  refs = [0,1,2,3,4].map(() => React.createRef());
+  upd(i, fn) { this.setState(s => ({ panes: s.panes.map((p, j) => j === i ? { ...p, ...fn(p) } : p) }), () => { const el = this.refs[i].current; if (el) el.scrollTop = el.scrollHeight; }); }
+  send(i) {
+    const p = this.state.panes[i];
+    if (p.mode === "ask") {
+      const a = p.answer.trim(); if (!a) return;
+      const n = parseInt(a, 10); const o = OPTIONS[n - 1];
+      this.upd(i, p => ({ mode: "compose", answer: "", msgs: [...p.msgs, ["u", o ? `${n}. ${o.title.replace(".", "")}` : a], ["a", o ? `Going with "${o.title.replace(".", "")}". Wiring it up now.` : "Got it. Wiring it up now."]] }));
+    } else if (p.mode === "compose") {
+      const d = p.draft.trim(); if (!d) return;
+      this.upd(i, p => ({ draft: "", title: p.title || (d.length > 40 ? d.slice(0, 40) + "…" : d), msgs: [...p.msgs, ["u", d], ["a", "On it."]] }));
+    }
+  }
+  decide(i, v) {
+    const r = { yes: "Approved once. Running…\n\nsyntax OK", always: "Approved   I won't ask again for python3 syntax checks in this project.\n\nsyntax OK", no: "Skipped. I won't run it   tell me how you'd like to proceed." }[v];
+    this.upd(i, p => ({ mode: "compose", msgs: [...p.msgs, ["a", r]] }));
+  }
+  componentDidMount() { this.refs.forEach(r => { if (r.current) r.current.scrollTop = r.current.scrollHeight; }); }
+  renderVals() {
+    return {
+      panes: this.state.panes.map((p, i) => {
+        const canSend = p.mode === "ask" ? !!p.answer.trim() : p.mode === "compose" ? !!p.draft.trim() : false;
+        const sel = parseInt(p.answer, 10);
+        const q = (p.query || "").toLowerCase();
+        const filtered = CHATS.filter(c => !q || (c.title + " " + c.msgs.map(m => m[1]).join(" ")).toLowerCase().includes(q));
+        const visible = p.visible || PAGE_SIZE;
+        const chats = filtered.slice(0, visible).map(c => ({
+          title: c.title, time: c.time, status: c.status, hasStatus: !!c.status,
+          preview: c.msgs[c.msgs.length - 1][1].replace(/\n+/g, " "),
+          onOpen: () => this.upd(i, () => ({ mode: c.mode, title: c.title, msgs: c.msgs, answer: "", draft: "" })),
+        }));
+        return {
+          label: p.label, title: p.title || "New chat", query: p.query || "", chats, noResults: chats.length === 0,
+          hasMore: visible < filtered.length, allShown: visible >= filtered.length,
+          onShowMore: () => this.upd(i, p => ({ visible: (p.visible || PAGE_SIZE) + PAGE_SIZE })),
+          isList: p.mode === "list", isChat: p.mode !== "list", isEmpty: p.mode !== "list" && p.msgs.length === 0,
+          onQuery: e => { const v = e.target.value; this.upd(i, () => ({ query: v })); },
+          onBack: () => this.upd(i, () => ({ mode: "list" })),
+          onNew: () => this.upd(i, () => ({ mode: "compose", title: "", msgs: [], draft: "", answer: "" })),
+          answer: p.answer, draft: p.draft, scrollRef: this.refs[i],
+          isAsk: p.mode === "ask", isCompose: p.mode === "compose", isPerm: p.mode === "perm",
+          msgs: p.msgs.map(([k, t]) => ({ isUser: k === "u", isAgent: k === "a", text: t })),
+          options: OPTIONS.map((o, j) => ({ ...o, num: j + 1, bg: sel === j + 1 ? "#ececea" : "transparent", onPick: () => this.upd(i, () => ({ answer: String(j + 1) })) })),
+          onAnswer: e => { const v = e.target.value; this.upd(i, () => ({ answer: v })); },
+          onDraft: e => { const v = e.target.value; this.upd(i, () => ({ draft: v })); },
+          onKey: e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this.send(i); } },
+          onSend: () => this.send(i),
+          onYes: () => this.decide(i, "yes"), onAlways: () => this.decide(i, "always"), onNo: () => this.decide(i, "no"),
+          onReset: () => this.upd(i, () => init()[i]),
+          sendDisabled: !canSend,
+          sendBg: canSend ? "#1e1e1e" : "#f0f0ee", sendColor: canSend ? "#fff" : "#c4c4c2",
+          sendBorder: canSend ? "#1e1e1e" : "#e2e2e0", sendCursor: canSend ? "pointer" : "default",
+        };
+      }),
+    };
+  }
+}
+</script>
+</body>
+</html>

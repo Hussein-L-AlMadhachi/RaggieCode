@@ -1,0 +1,234 @@
+:root {
+  color-scheme: light;
+
+  /* ---------- Colors: foreground ---------- */
+  --fg: #1e1e1e;
+  --fg-muted: #3f3f3d;
+  --fg-subtle: #5c6066;
+  --fg-disabled: #c4c4c2;
+
+  /* ---------- Colors: background ---------- */
+  --bg: #fff;
+  --bg-page: #dddddd;
+  --bg-hover: #f6f6f4;
+  --bg-hover-alt: #f1f1ef;
+  --bg-active: #f0f0ee;
+  --bg-code: #f6f6f4;
+
+  /* ---------- Colors: border ---------- */
+  --border: #1e1e1e;
+  --border-soft: #e9ecef;
+  --border-disabled: #e2e2e0;
+
+  /* ---------- Colors: primary ---------- */
+  --primary-bg: #1e1e1e;
+  --primary-bg-hover: #3a3a3a;
+  --primary-fg: #fff;
+
+  /* ---------- Colors: states ---------- */
+  --warn-bg: #ffec99;
+  --warn-bg-hover: #ffe066;
+  --warn-fg: #956521;
+
+  --success-fg: #2e7d32;
+  --success-bg: #ebfbee;
+
+  --danger-fg: #b54747;
+  --danger-bg: #ffe3e3;
+
+  /* ---------- Colors: chat bubbles ---------- */
+  --bubble-bg: #1e1e1e;
+  --bubble-fg: #fff;
+
+  /* ---------- Subagent blocks ----------
+     Dedicated accents so subagent panels do not borrow chat bubble colors.
+     Light keeps the existing ink accent; dark uses warm, muted grays that
+     blend with the charcoal surfaces instead of clashing with them. */
+  --subagent-accent: #1e1e1e;
+  --subagent-prompt-border: #1e1e1e;
+
+  /* ---------- Fonts ---------- */
+  --mono: 'IBM Plex Mono', monospace;
+  --sans: 'IBM Plex Sans', sans-serif;
+
+  /* ---------- Font sizes ---------- */
+  --fs-2xs: 9.5px;
+  --fs-xs: 10.5px;
+  --fs-sm: 11.5px;
+  --fs-md: 12.5px;
+  --fs-lg: 13.5px;
+  --fs-xl: 14px;
+  --fs-title: 20px;
+
+  /* ---------- Line heights ---------- */
+  --lh-tight: 14px;
+  --lh-base: 16px;
+
+  /* ---------- Spacing scale ---------- */
+  --sp-1: 2px;
+  --sp-2: 4px;
+  --sp-3: 6px;
+  --sp-4: 8px;
+  --sp-5: 10px;
+  --sp-6: 12px;
+  --sp-7: 14px;
+  --sp-8: 16px;
+  --sp-10: 20px;
+  --sp-11: 22px;
+  --sp-12: 24px;
+  --sp-14: 28px;
+
+  /* ---------- Radii ---------- */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-full: 900px;
+
+  /* ---------- Control sizes ---------- */
+  --control-sm: 22px;
+  --control-md: 24px;
+  --control-lg: 28px;
+  --checkbox: 20px;
+  --border-w: 1px;
+
+  /* ---------- Layout ---------- */
+  --page-max: 1100px;
+  --modal-sm: 330px;
+  --modal-md: 460px;
+}
+
+/* ---------- Dark theme ----------
+   Applied via html[data-theme='dark'] (see src/lib/theme.svelte.ts).
+   Only color variables are overridden; layout, type and spacing tokens
+   are theme-independent. Palette mirrors the light theme's inverted-mono
+   look: light chrome on dark surfaces. */
+html[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* ---------- Colors: foreground ---------- */
+  --fg: #e8e8e4;
+  --fg-muted: #b8b8b2;
+  --fg-subtle: #878b91;
+  --fg-disabled: #4a4a48;
+
+  /* ---------- Colors: background ---------- */
+  --bg: #1c1c1a;
+  --bg-page: #101010;
+  --bg-hover: #242422;
+  --bg-hover-alt: #2a2a27;
+  --bg-active: #282825;
+  --bg-code: #242422;
+
+  /* ---------- Colors: border ---------- */
+  --border: #6f6f6b;
+  --border-soft: #33332f;
+  --border-disabled: #3a3a38;
+
+  /* ---------- Colors: primary ---------- */
+  --primary-bg: #f0f0ec;
+  --primary-bg-hover: #d8d8d2;
+  --primary-fg: #151514;
+
+  /* ---------- Colors: states ---------- */
+  --warn-bg: #43390f;
+  --warn-bg-hover: #52460f;
+  --warn-fg: #e0b53e;
+
+  --success-fg: #6fce7a;
+  --success-bg: #17291a;
+
+  --danger-fg: #e06c6c;
+  --danger-bg: #341d1d;
+
+  /* ---------- Colors: chat bubbles ---------- */
+  --bubble-fg: #151514;
+  --bubble-bg: #e1e1e1;
+
+  /* ---------- Subagent blocks ----------
+     Warm, desaturated accents: the previous borrow of --bubble-bg put a
+     bright bar on dark charcoal, and the prompt's dashed border reused the
+     brightest border color in the palette. */
+  --subagent-accent: #514e45;
+  --subagent-prompt-border: #454540;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-page);
+  font-family: var(--sans);
+  color: var(--fg);
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--fg);
+}
+
+a:hover {
+  color: var(--fg-muted);
+}
+
+/* ---------- Text selection highlight ----------
+   Green hues that blend with the palette's success accents instead of the
+   browser's default blue. Light: soft mint background with deep green text.
+   Dark: deep green background with pale mint text (mirrors --success-fg). */
+::selection {
+  background: #b7e4c7;
+  color: #1b4332;
+}
+
+html[data-theme='dark'] ::selection {
+  background: #2f6b46;
+  color: #d8f3dc;
+}
+
+textarea,
+input,
+button {
+  font: inherit;
+  color: inherit;
+  /* Buttons are actions, not text: never allow selecting/anti-selecting
+     their labels (double-clicks during rapid clicking would otherwise
+     highlight the label). */
+  user-select: none;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+/* ---------- Hosted in the VS Code webview (html.vscode-host) ----------
+   The webview iframe is narrow and gets its own scrollbars. 100vw/100vh
+   include the scrollbar width, so any document-level overflow produces a
+   horizontal scrollbar that shifts ("offsets") the whole app. Fill the
+   iframe with percentages instead, kill page-level scrolling, and clamp
+   fixed-size modals to the panel width. */
+html.vscode-host,
+html.vscode-host body {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Percentage heights chain down: #app must have a definite height too,
+   otherwise .window's height: 100% resolves against auto and collapses. */
+html.vscode-host #app {
+  height: 100%;
+}
+
+html.vscode-host body {
+  background: var(--bg);
+}
+
+html.vscode-host {
+  --modal-sm: min(330px, 100%);
+  --modal-md: min(460px, 100%);
+}

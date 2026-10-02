@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from indexing.code_index_sdk import CodeIndexSDK
+from raggie_dirs import get_code_index_db_path
 
 
 def get_symbol_description(symbol_name: str, symbol_type: str = "function", file_path: str = None) -> str:
@@ -14,7 +15,7 @@ def get_symbol_description(symbol_name: str, symbol_type: str = "function", file
     Returns:
         Description string or error message
     """
-    db_path = Path.cwd() / ".raggie" / ".code_index.raggie"
+    db_path = get_code_index_db_path()
     
     if not db_path.exists():
         return f"Error: Code index database not found at {db_path}"
@@ -40,7 +41,7 @@ def update_symbol_description(symbol_name: str, description: str, symbol_type: s
     Returns:
         Success message or error message
     """
-    db_path = Path.cwd() / ".raggie" / ".code_index.raggie"
+    db_path = get_code_index_db_path()
     
     if not db_path.exists():
         return f"Error: Code index database not found at {db_path}"

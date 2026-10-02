@@ -1,8 +1,9 @@
+import io_backend
 from .manager import SkillManager
 
 
 def handle_get_skill(args, tool_call_id, agent_role=None):
-    """Handle the GetSkill tool call — fetches the full content of a specific skill by name for the caller's role."""
+    """Handle the GetSkill tool call   fetches the full content of a specific skill by name for the caller's role."""
     name = args.get("name")
     
     if not agent_role:
@@ -79,17 +80,7 @@ def handle(args, tool_call_id, agent_role=None):
     print(content)
     print("-" * 60)
     
-    consent = ""
-    try:
-        consent = input(f"\nDo you accept this {action} of '{name}' skill for role '{agent_role}'? (y/n): ").strip().lower()
-    except KeyboardInterrupt:
-        print()
-        exit(0)
-    except EOFError:
-        print()
-        exit(0)
-    
-    if consent == 'y' or consent == 'yes':
+    if io_backend.confirm(f"Do you accept this {action} of '{name}' skill for role '{agent_role}'?"):
         try:
             manager.set_skill(agent_role, name, content)
             return {
@@ -104,10 +95,7 @@ def handle(args, tool_call_id, agent_role=None):
                 "content": f"Error {action}ing skill: {str(e)}"
             }
     else:
-        try:
-            reason = input(f"Reason for refusal (optional, press Enter to skip): ").strip()
-        except (KeyboardInterrupt, EOFError):
-            reason = ""
+        reason = io_backend.ask("Reason for refusal (optional, press Enter to skip): ").strip()
         if reason:
             return {
                 "role": "tool",
