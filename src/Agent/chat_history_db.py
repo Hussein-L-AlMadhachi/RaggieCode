@@ -1,191 +1,58 @@
 import sqlite3
 import sys
 import json
+import html
 import re
 from pathlib import Path
 from typing import List, Dict, Optional
 from prompt_toolkit import prompt
 
+from raggie_dirs import get_chat_db_path
 
-DB_PATH = Path(".raggie/.raggie.chat")
+
+# Backwards-compat override hook. Tests patch this to redirect the chat DB
+# to a temp path; production code leaves it None and uses get_chat_db_path().
+DB_PATH = None
+
+
+def _resolve_db_path():
+    return DB_PATH if DB_PATH is not None else get_chat_db_path()
 
 
 def _get_conn():
-    conn = sqlite3.connect(DB_PATH)
+    db_path = _resolve_db_path()
+    ensure_db_file(db_path)
+    conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
-def init_db():
-    """Initialize the chat history database with required tables."""
-    # Ensure parent directory exists
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    
-    conn = _get_conn()
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS chats (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            role TEXT NOT NULL,
-            title TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id INTEGER NOT NULL,
-            parent_session_id INTEGER,
-            redirect_session_id INTEGER,
-            toolcall_id TEXT,
-            effort INTEGER,
-            depth INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE,
-            FOREIGN KEY (parent_session_id) REFERENCES sessions(id) ON DELETE CASCADE,
-            FOREIGN KEY (redirect_session_id) REFERENCES sessions(id) ON DELETE SET NULL
-        )
-    """)
+def ensure_db_file(db_path):
+    """Create the data dir and the chat DB file (with schema) if missing.
 
-    # Migrate old sessions table: add missing columns
-    cursor.execute("PRAGMA table_info(sessions)")
-    session_columns = [col[1] for col in cursor.fetchall()]
-    if "redirect_session_id" not in session_columns:
-        cursor.execute("ALTER TABLE sessions ADD COLUMN redirect_session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL")
-    if "toolcall_id" not in session_columns:
-        cursor.execute("ALTER TABLE sessions ADD COLUMN toolcall_id TEXT")
-    if "effort" not in session_columns:
-        cursor.execute("ALTER TABLE sessions ADD COLUMN effort INTEGER")
-    if "depth" not in session_columns:
-        cursor.execute("ALTER TABLE sessions ADD COLUMN depth INTEGER DEFAULT 0")
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id INTEGER NOT NULL,
-            role TEXT NOT NULL,
-            content TEXT,
-            tool_calls TEXT,
-            tool_call_id TEXT,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS skills (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            role TEXT NOT NULL,
-            name TEXT NOT NULL,
-            content TEXT,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(role, name)
-        )
-    """)
+    sqlite raises "unable to open database file" the moment a connection is
+    opened against a path whose parent dir or file does not exist. The web ui
+    queries the DB before any session exists, so a missing file must be created
+    on the spot instead of surfacing that error to the user. If creation
+    actually fails (read-only dir, bad path, ...) the underlying OSError or
+    migration error is propagated.
+    """
+    db_path = Path(db_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    if not db_path.exists():
+        init_db(db_path)
 
-    # Migrate old schema (role as PRIMARY KEY, no name column) to new schema
-    cursor.execute("PRAGMA table_info(skills)")
-    columns = [col[1] for col in cursor.fetchall()]
-    if "name" not in columns and "role" in columns:
-        cursor.execute("ALTER TABLE skills RENAME TO skills_old")
-        cursor.execute("""
-            CREATE TABLE skills (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                role TEXT NOT NULL,
-                name TEXT NOT NULL,
-                content TEXT,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(role, name)
-            )
-        """)
-        cursor.execute("""
-            INSERT INTO skills (role, name, content, updated_at)
-            SELECT role, role, content, updated_at FROM skills_old
-        """)
-        cursor.execute("DROP TABLE skills_old")
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS changes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            prompt_id TEXT NOT NULL,
-            role TEXT NOT NULL,
-            session_id INTEGER,
-            change_type TEXT NOT NULL,
-            file_path TEXT,
-            description TEXT,
-            details TEXT,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS todo_lists (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id INTEGER NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-        )
-    """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS todo_tasks (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            todo_list_id INTEGER NOT NULL,
-            goal TEXT NOT NULL,
-            requirements TEXT,
-            notes TEXT,
-            context TEXT,
-            status TEXT NOT NULL DEFAULT 'pending',
-            order_index INTEGER NOT NULL,
-            toolcall_id TEXT,
-            cancel_reason TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (todo_list_id) REFERENCES todo_lists(id) ON DELETE CASCADE
-        )
-    """)
 
-    # Migrate old todo_tasks table: add toolcall_id column if missing
-    cursor.execute("PRAGMA table_info(todo_tasks)")
-    task_columns = [col[1] for col in cursor.fetchall()]
-    if "toolcall_id" not in task_columns:
-        cursor.execute("ALTER TABLE todo_tasks ADD COLUMN toolcall_id TEXT")
-    if "cancel_reason" not in task_columns:
-        cursor.execute("ALTER TABLE todo_tasks ADD COLUMN cancel_reason TEXT")
+def init_db(db_path=None):
+    """Initialize the chat history database via yoyo migrations."""
+    db_path = Path(db_path) if db_path is not None else Path(_resolve_db_path())
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    from db_migrations import run_yoyo_migrations
+    run_yoyo_migrations(str(db_path), CHAT_DB_MIGRATIONS_DIR)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS session_files (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id INTEGER NOT NULL,
-            file_path TEXT NOT NULL,
-            operation TEXT NOT NULL,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-        )
-    """)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS handovers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id INTEGER NOT NULL,
-            new_session_id INTEGER,
-            handover_text TEXT NOT NULL,
-            token_usage INTEGER,
-            context_window INTEGER,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
-            FOREIGN KEY (new_session_id) REFERENCES sessions(id) ON DELETE SET NULL
-        )
-    """)
-    
-    conn.commit()
-    conn.close()
+# Directory containing yoyo migration files for the chat history DB.
+CHAT_DB_MIGRATIONS_DIR = str(Path(__file__).parent / "migrations" / "chat_db")
 
 
 def create_chat(role: str, title: Optional[str] = None) -> int:
@@ -225,37 +92,41 @@ def update_chat_title(chat_id: int, title: str):
 
 
 def generate_title(message: str) -> str:
-    """Generate a title from a user message (first 50 chars + ... if longer)."""
+    """Generate a chat title from the first user message.
+
+    The full message is kept (whitespace-normalized to single spaces so it
+    can render as a one-line title); the frontend does the visual
+    truncation. The clamp below is purely a safeguard for the database,
+    not for display.
+    """
     if not message:
         return "Untitled"
-    
-    # Remove leading/trailing whitespace
-    message = message.strip()
-    
-    # Take first 50 characters
-    if len(message) <= 50:
+
+    # Newlines would break the single-line title rendering; collapse them.
+    message = " ".join(message.split())
+
+    if len(message) <= 2000:
         return message
-    else:
-        return message[:50] + "..."
+    return message[:2000] + "..."
 
 
 def list_chats(role: str) -> List[Dict]:
     """Get all chats for a given role with their titles and metadata."""
     conn = _get_conn()
     cursor = conn.cursor()
-    
+
     cursor.execute("""
-        DELETE FROM chats 
+        DELETE FROM chats
         WHERE id IN (
-            SELECT c.id 
+            SELECT c.id
             FROM chats c
             JOIN sessions s ON c.id = s.chat_id
-            WHERE c.role = ? 
-            AND s.parent_session_id IS NULL 
+            WHERE c.role = ?
+            AND s.parent_session_id IS NULL
             AND NOT EXISTS (
-                SELECT 1 
-                FROM messages m 
-                WHERE m.session_id = s.id 
+                SELECT 1
+                FROM messages m
+                WHERE m.session_id = s.id
                     AND m.role = 'user'
             )
         )
@@ -267,7 +138,7 @@ def list_chats(role: str) -> List[Dict]:
         WHERE role = ?
         ORDER BY id DESC
     """, (role,))
-    
+
     chats = []
     for row in cursor.fetchall():
         chats.append({
@@ -276,9 +147,82 @@ def list_chats(role: str) -> List[Dict]:
             "created_at": row[2],
             "updated_at": row[3]
         })
-    
+
     conn.close()
     return chats
+
+
+def sanitize_fts_query(query: str) -> str:
+    """Build a safe FTS5 MATCH expression from a free-form query.
+
+    Keeps word characters, prefixes every token with a wildcard so partial
+    matches hit (like a substring search), and drops anything dangerous
+    (quotes, operators).
+    """
+    tokens = re.findall(r"[\w]+", query)
+    if not tokens:
+        return ""
+    return " ".join(f"{token}*" for token in tokens)
+
+
+def search_user_messages(query: str, role: str, limit: int = 10) -> List[Dict]:
+    """Full-text search over user messages (SQLite FTS5).
+
+    Returns matches ordered by relevance with a highlighted snippet, so UIs
+    can jump the user straight to the matching message.
+    """
+    match_query = sanitize_fts_query(query)
+    if not match_query:
+        return []
+
+    conn = _get_conn()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT s.chat_id, c.title, m.id, m.content,
+               snippet(messages_fts, 0, ?, ?, '...', 12),
+               c.updated_at
+        FROM messages_fts f
+        JOIN messages m ON m.id = f.rowid
+        JOIN sessions s ON s.id = m.session_id
+        JOIN chats c ON c.id = s.chat_id
+        WHERE messages_fts MATCH ?
+          AND m.role = 'user'
+          AND c.role = ?
+          AND s.parent_session_id IS NULL
+        ORDER BY rank
+        LIMIT ?
+        """,
+        (
+            "\x02", "\x03",
+            match_query,
+            role,
+            int(limit),
+        ),
+    )
+
+    results = []
+    for row in cursor.fetchall():
+        chat_id, title, message_id, _content, snippet_text, updated_at = row
+
+        # Snippet markers travel via the FTS function; any message content that
+        # looks like markup is neutralized by HTML-escaping everything, then only
+        # the two control markers are turned into <mark> tags. This keeps the
+        # front-end's {@html} rendering injection-safe even for truncated tags
+        # or adversarial content.
+        safe_snippet = html.escape(snippet_text or "", quote=False)
+        safe_snippet = safe_snippet.replace("\x02", "<mark>").replace("\x03", "</mark>")
+        results.append({
+            "chatId": chat_id,
+            "title": title or "Untitled",
+            "messageId": message_id,
+            "snippet": safe_snippet,
+            "updatedAt": updated_at,
+        })
+
+    conn.close()
+    return results
 
 
 def select_chat(role: str) -> Optional[int]:
@@ -299,6 +243,8 @@ def select_chat(role: str) -> Optional[int]:
 
     while True:
         try:
+            import io_backend
+            io_backend._flush_stdin()
             choice = prompt("Select a chat: ").strip()
         except KeyboardInterrupt:
             print()
@@ -395,21 +341,45 @@ def get_chat_role(chat_id: int) -> Optional[str]:
     
     return result[0] if result else None
 
+def get_chat_preview(chat_id: int) -> Optional[Dict]:
+    """Get the most recent user or assistant message in a chat, as a preview.
 
-def create_session(chat_id: int, parent_session_id: Optional[int] = None, toolcall_id: Optional[str] = None, effort: Optional[int] = None, depth: int = 0) -> int:
+    Returns {"role": ..., "text": ...} or None when the chat has no messages.
+    """
+    conn = _get_conn()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT m.role, m.content
+        FROM messages m
+        JOIN sessions s ON s.id = m.session_id
+        WHERE s.chat_id = ? AND m.role IN ('user', 'assistant')
+        ORDER BY m.id DESC
+        LIMIT 1
+    """, (chat_id,))
+
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return None
+    return {"role": row[0], "text": row[1]}
+
+
+def create_session(chat_id: int, parent_session_id: Optional[int] = None, toolcall_id: Optional[str] = None, thinking_mode: Optional[int] = None, depth: int = 0) -> int:
     """Create a new session for a given chat and return its ID."""
     conn = _get_conn()
     cursor = conn.cursor()
-    
+
     cursor.execute("""
         INSERT INTO sessions (chat_id, parent_session_id, toolcall_id, effort, depth)
         VALUES (?, ?, ?, ?, ?)
-    """, (chat_id, parent_session_id, toolcall_id, effort, depth))
-    
+    """, (chat_id, parent_session_id, toolcall_id, thinking_mode, depth))
+
     session_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    
+
     return session_id
 
 
@@ -431,13 +401,13 @@ def get_latest_session(chat_id: int) -> Optional[int]:
     return result[0] if result else None
 
 
-def get_or_create_session(chat_id: int, parent_session_id: Optional[int] = None, effort: Optional[int] = None) -> int:
+def get_or_create_session(chat_id: int, parent_session_id: Optional[int] = None, thinking_mode: Optional[int] = None) -> int:
     """Get the active session for a chat (following redirects), or create one if none exists."""
     session_id = get_active_session(chat_id)
     if session_id is None:
-        session_id = create_session(chat_id, parent_session_id, effort=effort)
-    elif effort is not None:
-        set_session_effort(session_id, effort)
+        session_id = create_session(chat_id, parent_session_id, thinking_mode=thinking_mode)
+    elif thinking_mode is not None:
+        set_session_thinking_mode(session_id, thinking_mode)
     return session_id
 
 
@@ -466,14 +436,18 @@ def save_message(session_id: int, message: Dict):
     tool_call_id = message.get("tool_call_id")
     if tool_call_id is not None:
         tool_call_id = str(tool_call_id)
-    
+
     # Convert tool_calls to JSON string if present
     tool_calls_json = json.dumps(tool_calls) if tool_calls else None
-    
+
+    # Persist reasoning_content (DeepSeek thinking mode requires it back)
+    reasoning_content = message.get("reasoning_content")
+    reasoning_content_str = str(reasoning_content) if reasoning_content else None
+
     cursor.execute("""
-        INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id)
-        VALUES (?, ?, ?, ?, ?)
-    """, (session_id, role, content, tool_calls_json, tool_call_id))
+        INSERT INTO messages (session_id, role, content, tool_calls, tool_call_id, reasoning_content)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (session_id, role, content, tool_calls_json, tool_call_id, reasoning_content_str))
     
     # Update session's updated_at timestamp
     cursor.execute("""
@@ -491,6 +465,140 @@ def save_message(session_id: int, message: Dict):
     
     conn.commit()
     conn.close()
+
+
+def load_messages_page(session_ids, before_id=None, limit=30):
+    """Load one page of messages ending at *before_id* (exclusive), newest first.
+
+    *session_ids* may be a single int or a list of main-agent session IDs
+    (e.g. [oldest_handed_over_session, ..., active_session]) whose messages
+    are displayed as one continuous history. Message ids are globally
+    increasing across sessions, so cross-session pagination stays correct.
+
+    Returns (messages_chronological, oldest_id, has_more) where messages is a
+    list of raw message dicts (oldest first) each carrying its DB "id".
+    Handover-related messages carry kind="handover_prompt" (the machine-
+    generated internal prompt) or kind="handover_doc" (the agent-written
+    handover document).
+    """
+    if isinstance(session_ids, (int, str)):
+        session_ids = [int(session_ids)]
+    params = list(session_ids)
+    placeholders = ",".join("?" * len(session_ids))
+
+    conn = _get_conn()
+    cursor = conn.cursor()
+
+    if before_id is not None:
+        cursor.execute(f"""
+            SELECT id, session_id, role, content, tool_calls, tool_call_id, reasoning_content
+            FROM messages
+            WHERE session_id IN ({placeholders}) AND id < ?
+            ORDER BY id DESC
+            LIMIT ?
+        """, (*params, before_id, limit))
+    else:
+        cursor.execute(f"""
+            SELECT id, session_id, role, content, tool_calls, tool_call_id, reasoning_content
+            FROM messages
+            WHERE session_id IN ({placeholders})
+            ORDER BY id DESC
+            LIMIT ?
+        """, (*params, limit))
+
+    rows = list(cursor.fetchall())
+
+    has_more = False
+    if rows:
+        # rows are newest-first: rows[0] is the newest message of the page,
+        # rows[-1] the oldest. has_more must ask "is anything older than the
+        # oldest message we returned?" - checking against the newest would
+        # flag has_more=True even when this page holds the whole history.
+        oldest_row_id = rows[-1][0]
+        cursor.execute(
+            f"SELECT 1 FROM messages WHERE session_id IN ({placeholders}) AND id < ? LIMIT 1",
+            (*params, oldest_row_id),
+        )
+        has_more = cursor.fetchone() is not None
+
+    # Newest-first from SQL; reverse to chronological order.
+    rows.reverse()
+
+    # Handover texts for these sessions: the agent-written summary saved as a
+    # user message at the top of the handover target session.
+    handover_texts = {}
+    if rows:
+        cursor.execute(
+            f"SELECT new_session_id, handover_text FROM handovers WHERE new_session_id IN ({placeholders})",
+            params,
+        )
+        handover_texts = {row[0]: row[1] for row in cursor.fetchall()}
+
+    conn.close()
+
+    messages = []
+    for row in rows:
+        content_str = str(row[3]) if row[3] is not None else ""
+        content = content_str
+        try:
+            parsed = json.loads(content_str)
+            if (isinstance(parsed, list) and parsed
+                    and all(isinstance(item, dict) and "type" in item for item in parsed)):
+                content = parsed
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+        message = {
+            "id": int(row[0]),
+            "session_id": int(row[1]),
+            "role": str(row[2]) if row[2] is not None else "user",
+            "content": content,
+        }
+
+        if row[4]:
+            try:
+                message["tool_calls"] = json.loads(row[4])
+            except (json.JSONDecodeError, TypeError):
+                message["tool_calls"] = None
+
+        if row[5]:
+            message["tool_call_id"] = str(row[5])
+
+        if row[6]:
+            message["reasoning_content"] = str(row[6])
+
+        # Skip empty messages (no content, no tool_calls, no tool_call_id)
+        if not message.get("content") and not message.get("tool_calls") and not message.get("tool_call_id"):
+            continue
+
+        handover_kind = _handover_message_kind(
+            message["role"], content_str, handover_texts.get(int(row[1]))
+        )
+        if handover_kind:
+            message["kind"] = handover_kind
+
+        messages.append(message)
+
+    oldest_id = min(int(row[0]) for row in rows) if rows else None
+    return messages, oldest_id, has_more
+
+
+HANDOVER_PROMPT_PREFIX = "Without using any more tool calls, give me a handover instruction"
+
+
+def _handover_message_kind(role, content, handover_text_for_session):
+    """Classify a handover-related message, or return None.
+
+    The machine-generated handover prompt is internal plumbing   callers can
+    hide it. The agent-written handover document is worth showing to the user.
+    """
+    if role != "user":
+        return None
+    if content.lstrip().startswith(HANDOVER_PROMPT_PREFIX):
+        return "handover_prompt"
+    if handover_text_for_session and content == handover_text_for_session:
+        return "handover_doc"
+    return None
 
 
 def repair_message_sequence(messages: List[Dict]) -> List[Dict]:
@@ -569,7 +677,7 @@ def load_messages(session_id: int) -> List[Dict]:
     # Order by id, not timestamp: timestamps can tie (same-second inserts),
     # which makes the ordering of tool_calls vs tool responses nondeterministic.
     cursor.execute("""
-        SELECT role, content, tool_calls, tool_call_id
+        SELECT role, content, tool_calls, tool_call_id, reasoning_content
         FROM messages
         WHERE session_id = ?
         ORDER BY id ASC
@@ -607,6 +715,10 @@ def load_messages(session_id: int) -> List[Dict]:
         # Add tool_call_id if present
         if row[3]:
             message["tool_call_id"] = str(row[3])
+
+        # Restore reasoning_content if present (DeepSeek thinking mode)
+        if row[4]:
+            message["reasoning_content"] = str(row[4])
         
         # Skip empty messages (no content, no tool_calls, no tool_call_id)
         if not message.get("content") and not message.get("tool_calls") and not message.get("tool_call_id"):
@@ -998,10 +1110,10 @@ def add_todo_task(todo_list_id: int, goal: str, requirements: Optional[str] = No
         rows = cursor.fetchall()
 
         if not rows:
-            # Empty list — insert at index 0
+            # Empty list   insert at index 0
             new_order_index = 0
         elif insert_after >= len(rows):
-            # Insert after the last task — append at end
+            # Insert after the last task   append at end
             new_order_index = rows[-1][0] + 1
         elif insert_after <= 0:
             # Insert at the beginning
@@ -1104,14 +1216,14 @@ def get_todo_tasks(todo_list_id: int) -> List[Dict]:
 
 
 def get_active_todo_list(session_id: int) -> Optional[Dict]:
-    """Get the active (pending, in_progress, or rejected) todo list for a session."""
+    """Get the active (pending or approved) todo list for a session."""
     conn = _get_conn()
     cursor = conn.cursor()
     
     cursor.execute("""
         SELECT id, session_id, status, created_at, updated_at
         FROM todo_lists
-        WHERE session_id = ? AND status IN ('pending', 'in_progress', 'rejected')
+        WHERE session_id = ? AND status IN ('pending', 'approved')
         ORDER BY id DESC
         LIMIT 1
     """, (session_id,))
@@ -1126,6 +1238,42 @@ def get_active_todo_list(session_id: int) -> Optional[Dict]:
             "status": result[2],
             "created_at": result[3],
             "updated_at": result[4]
+        }
+    return None
+
+
+def get_todo_task(task_id: int) -> Optional[Dict]:
+    """Get a single todo task by ID, including its parent todo_list_id.
+
+    Returns the full task dict (same shape as get_next_pending_task rows)
+    or None if no task exists with the given ID.
+    """
+    conn = _get_conn()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT id, todo_list_id, goal, requirements, notes, context, status, order_index, toolcall_id, cancel_reason, created_at, updated_at
+        FROM todo_tasks
+        WHERE id = ?
+    """, (task_id,))
+
+    result = cursor.fetchone()
+    conn.close()
+
+    if result:
+        return {
+            "id": result[0],
+            "todo_list_id": result[1],
+            "goal": result[2],
+            "requirements": result[3],
+            "notes": result[4],
+            "context": result[5],
+            "status": result[6],
+            "order_index": result[7],
+            "toolcall_id": result[8],
+            "cancel_reason": result[9],
+            "created_at": result[10],
+            "updated_at": result[11]
         }
     return None
 
@@ -1234,7 +1382,7 @@ def get_next_pending_task(todo_list_id: int) -> Optional[Dict]:
     result = cursor.fetchone()
 
     if not result:
-        # No in_progress task — get the next pending one
+        # No in_progress task   get the next pending one
         cursor.execute("""
             SELECT id, goal, requirements, notes, context, status, order_index, toolcall_id, cancel_reason, created_at, updated_at
             FROM todo_tasks
@@ -1383,8 +1531,8 @@ def set_redirect_session_id(session_id: int, redirect_session_id: int):
     conn.close()
 
 
-def get_session_effort(session_id: int) -> Optional[int]:
-    """Get the effort level stored on a session."""
+def get_session_thinking_mode(session_id: int) -> Optional[int]:
+    """Get the thinking mode stored on a session."""
     conn = _get_conn()
     cursor = conn.cursor()
     cursor.execute("SELECT effort FROM sessions WHERE id = ?", (session_id,))
@@ -1393,11 +1541,11 @@ def get_session_effort(session_id: int) -> Optional[int]:
     return result[0] if result else None
 
 
-def set_session_effort(session_id: int, effort: int):
-    """Set the effort level on a session."""
+def set_session_thinking_mode(session_id: int, thinking_mode: int):
+    """Set the thinking mode on a session."""
     conn = _get_conn()
     cursor = conn.cursor()
-    cursor.execute("UPDATE sessions SET effort = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (effort, session_id))
+    cursor.execute("UPDATE sessions SET effort = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (thinking_mode, session_id))
     conn.commit()
     conn.close()
 
@@ -1573,3 +1721,76 @@ def resolve_todo_session_id(session_id: int) -> int:
     if is_global_todo_enabled(session_id):
         return get_root_session_id(session_id)
     return session_id
+
+
+# -- command whitelist ------------------------------------------------------
+
+def get_command_whitelist(role: str) -> List[str]:
+    """Return the list of whitelisted shell commands for a role."""
+    conn = _get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT command FROM command_whitelist WHERE role = ? ORDER BY command",
+        (role,),
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+def add_to_command_whitelist(role: str, command: str) -> bool:
+    """Add a command to the role's whitelist. Returns True if inserted, False if it already existed."""
+    conn = _get_conn()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO command_whitelist (role, command) VALUES (?, ?)",
+            (role, command),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+
+def remove_from_command_whitelist(role: str, command: str) -> bool:
+    """Remove a command from the role's whitelist. Returns True if a row was deleted."""
+    conn = _get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM command_whitelist WHERE role = ? AND command = ?",
+        (role, command),
+    )
+    conn.commit()
+    deleted = cursor.rowcount > 0
+    conn.close()
+    return deleted
+
+
+def is_command_whitelisted(role: str, command: str) -> bool:
+    """True when the exact command string is in the role's whitelist."""
+    conn = _get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT 1 FROM command_whitelist WHERE role = ? AND command = ?",
+        (role, command),
+    )
+    found = cursor.fetchone() is not None
+    conn.close()
+    return found
+
+
+def clear_command_whitelist(role: str) -> int:
+    """Remove all whitelisted commands for a role. Returns the number of rows deleted."""
+    conn = _get_conn()
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM command_whitelist WHERE role = ?",
+        (role,),
+    )
+    conn.commit()
+    deleted = cursor.rowcount
+    conn.close()
+    return deleted

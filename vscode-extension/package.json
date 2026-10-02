@@ -1,52 +1,190 @@
 {
-  "name": "raggie-code-tools",
-  "displayName": "Raggie Code Tools",
-  "description": "Copy the current selection as @path/to/file:23-43",
-  "version": "0.1.0",
+  "name": "raggie-code",
+  "displayName": "Raggie Code",
+  "description": "Raggie Code, your coding agent in VS Code: chat with the agent in a sidebar and copy selection references straight into it.",
+  "version": "1.0.3",
   "publisher": "HusseinAlmadhaji",
-  "license": "MIT",
+  "license": "Apache-2.0",
+  "icon": "media/raggie-icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Hussein-L-AlMadhachi/raggie9"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
-    "Other"
+    "AI",
+    "Chat"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished",
+    "workspaceContains:.raggie"
+  ],
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "raggie",
+          "title": "Raggie Code",
+          "icon": "media/raggie-activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "raggie": [
+        {
+          "id": "raggie.chat",
+          "name": "Raggie Code",
+          "type": "webview"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "copyRef.copySelection",
         "title": "Copy Reference for Raggie Code"
+      },
+      {
+        "command": "raggie.openChat",
+        "title": "Open Chat",
+        "category": "Raggie Code"
+      },
+      {
+        "command": "raggie.moveChatToSecondarySidebar",
+        "title": "Move Chat to Secondary Sidebar",
+        "category": "Raggie Code"
+      },
+      {
+        "command": "raggie.manageServer",
+        "title": "Manage Server",
+        "category": "Raggie Code"
+      },
+      {
+        "command": "raggie.startServer",
+        "title": "Start Server",
+        "category": "Raggie Code"
+      },
+      {
+        "command": "raggie.restartServer",
+        "title": "Restart Server",
+        "category": "Raggie Code"
+      },
+      {
+        "command": "raggie.stopServer",
+        "title": "Stop Server",
+        "category": "Raggie Code"
+      },
+      {
+        "command": "raggie.turnOff",
+        "title": "Turn Off Agent and Close Panel",
+        "category": "Raggie Code",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "raggie.reloadUi",
+        "title": "Reload Web UI",
+        "category": "Raggie Code",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "raggie.askAboutSelection",
+        "title": "Ask About Selection",
+        "category": "Raggie Code"
       }
     ],
-    "menus": {
-      "editor/context": [
-        {
-          "command": "copyRef.copySelection",
-          "when": "editorHasSelection",
-          "group": "9_cutcopypaste@1"
-        }
-      ]
-    },
     "keybindings": [
       {
         "command": "copyRef.copySelection",
         "key": "ctrl+alt+c",
         "mac": "cmd+alt+c",
         "when": "editorHasSelection"
+      },
+      {
+        "command": "raggie.askAboutSelection",
+        "key": "ctrl+shift+alt+r",
+        "mac": "cmd+shift+alt+r",
+        "when": "editorHasSelection"
       }
-    ]
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "raggie.turnOff",
+          "when": "view == raggie.chat",
+          "group": "navigation"
+        },
+        {
+          "command": "raggie.reloadUi",
+          "when": "view == raggie.chat",
+          "group": "navigation"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "copyRef.copySelection",
+          "when": "editorHasSelection",
+          "group": "9_cutcopypaste@1"
+        },
+        {
+          "command": "raggie.askAboutSelection",
+          "when": "editorHasSelection",
+          "group": "raggie@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Raggie Code",
+      "properties": {
+        "raggie.server.port": {
+          "type": "number",
+          "default": 8765,
+          "description": "Port the local Raggie server listens on."
+        },
+        "raggie.server.pythonPath": {
+          "type": "string",
+          "default": "raggie",
+          "description": "Path to the Raggie CLI executable ('raggie' resolves to the command on PATH)."
+        },
+        "raggie.server.role": {
+          "type": "string",
+          "default": "code",
+          "description": "Role passed to the Raggie server (e.g. 'code')."
+        },
+        "raggie.server.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the Raggie server automatically when the extension activates."
+        },
+        "raggie.server.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra command-line arguments passed to the Raggie server process."
+        },
+        "raggie.chat.openOnStartup": {
+          "type": "boolean",
+          "default": false,
+          "description": "Open the Raggie chat view automatically when the extension activates."
+        }
+      }
+    }
   },
   "scripts": {
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./",
+    "compile": "node ./node_modules/typescript/bin/tsc -p ./",
+    "watch": "node ./node_modules/typescript/bin/tsc -watch -p ./",
     "vscode:prepublish": "npm run compile",
-    "package": "vsce package --no-dependencies"
+    "package": "vsce package --no-dependencies",
+    "test": "vitest run",
+    "build:ui": "node scripts/copy-ui.js"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
+    "@types/node": "^20.19.43",
     "@types/vscode": "^1.85.0",
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "vitest": "^5.0.2"
   }
 }

@@ -1,6 +1,6 @@
 import os
 import re
-from .utils import is_ignored_by_gitignore, is_within_cwd, BLUE, RESET, auto_record_change, reindex_after_change
+from .utils import is_ignored_by_gitignore, is_within_cwd, prompt_path_permission, denial_content, BLUE, RESET, auto_record_change, reindex_after_change
 
 
 def _fuzzy_find_literal(content, old_string):
@@ -89,7 +89,7 @@ def _find_closest_snippet(content, old_string, max_lines=10):
             end = min(len(content_lines), i + max_lines)
             snippet_lines = []
             for j in range(start, end):
-                marker = " >" if j == i else "  "
+                marker = " ❯" if j == i else "  "
                 snippet_lines.append(f"{marker} {j+1}: {content_lines[j]}")
             return (
                 f"First line of old_string resembles file content at line {i+1}.\n"
@@ -117,22 +117,28 @@ def handle(arguments, toolcall_id, session_id=None, code_indexer=None):
     try:
         # Check if the file is outside the current working directory
         if not is_within_cwd(file_path):
-            return {
-                "role": "tool",
-                "tool_call_id": toolcall_id,
-                "content": "Error: access denied - path is outside the current working directory",
-            }
+            if not prompt_path_permission(
+                file_path, "replace", "path is outside the current working directory"
+            ):
+                return {
+                    "role": "tool",
+                    "tool_call_id": toolcall_id,
+                    "content": denial_content("Error: access denied - path is outside the current working directory"),
+                }
 
         # Check if file is in .gitignore
         if is_ignored_by_gitignore(file_path):
-            return {
-                "role": "tool",
-                "tool_call_id": toolcall_id,
-                "content": (
-                    f"Error: File '{file_path}' is in .gitignore. "
-                    "Operations on gitignored files are not allowed."
-                ),
-            }
+            if not prompt_path_permission(
+                file_path, "replace", "file is gitignored"
+            ):
+                return {
+                    "role": "tool",
+                    "tool_call_id": toolcall_id,
+                    "content": denial_content(
+                        f"Error: File '{file_path}' is in .gitignore. "
+                        "Operations on gitignored files are not allowed."
+                    ),
+                }
 
         if not os.path.exists(file_path):
             return {

@@ -245,7 +245,7 @@ def example_source_body_reading():
         # Disambiguate by file path when the same name appears in multiple files
         matches = sdk.get_function_by_name(func_name)
         if len(matches) > 1:
-            print(f"\n'{func_name}' appears in {len(matches)} files — reading from first:")
+            print(f"\n'{func_name}' appears in {len(matches)} files   reading from first:")
             body = sdk.get_function_body(func_name, file_path=matches[0].file_path)
             if body:
                 print(body[:200])

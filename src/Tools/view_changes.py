@@ -2,6 +2,10 @@ import os
 from Agent.git_manager import GitManager
 from .utils import BLUE, RESET
 
+# Hard cap on characters emitted per diff call. Even one page can exceed safe
+# output size if a single diff is enormous (e.g. a minified bundle).
+MAX_OUTPUT_CHARS = 60000
+
 
 def handle(arguments, toolcall_id):
     """Handle ViewChanges tool calls."""
@@ -12,6 +16,8 @@ def handle(arguments, toolcall_id):
     max_count = arguments.get("max_count", 10)
     category = arguments.get("category")
     max_diff_lines = arguments.get("max_diff_lines", 500)
+    page = arguments.get("page", 1)
+    files_per_page = arguments.get("files_per_page", 25)
 
     # --- Input validation ---
     VALID_VIEW_TYPES = {'status', 'diff', 'log'}
@@ -71,6 +77,23 @@ def handle(arguments, toolcall_id):
                 "content": f"Invalid max_diff_lines: must be non-negative, got {max_diff_lines}.",
             }
 
+    # Validate page and files_per_page (diff pagination)
+    for name, value, minimum in (("page", page, 1), ("files_per_page", files_per_page, 1)):
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return {
+                "role": "tool",
+                "tool_call_id": toolcall_id,
+                "content": f"Invalid {name}: must be a number, got {type(value).__name__}.",
+            }
+        if int(value) != value or value < minimum:
+            return {
+                "role": "tool",
+                "tool_call_id": toolcall_id,
+                "content": f"Invalid {name}: must be an integer >= {minimum}, got {value}.",
+            }
+    page = int(page)
+    files_per_page = int(files_per_page)
+
     try:
         git_manager = GitManager(root_dir=os.getcwd())
 
@@ -128,23 +151,67 @@ def handle(arguments, toolcall_id):
             if not diffs:
                 content = "No differences found between working tree and last commit."
             else:
-                result_parts = []
-                result_parts.append(f"Showing {len(diffs)} changed file(s):")
-                if path:
-                    result_parts.append(f"(filtered to files containing '{path}')")
-                if max_diff_lines:
-                    result_parts.append(f"(diffs truncated to {max_diff_lines} lines each)")
-                result_parts.append("")
+                total_files = len(diffs)
+                # Pagination: diffs are shown files_per_page at a time so a
+                # huge change set (e.g. 1000+ files) can never overflow the
+                # model's context window in a single tool result.
+                total_pages = (total_files + files_per_page - 1) // files_per_page
+                if page > total_pages:
+                    content = (
+                        f"page {page} is out of range: {total_files} changed file(s) "
+                        f"span {total_pages} page(s) at {files_per_page} files per page. "
+                        f"Request page 1 to {total_pages}."
+                    )
+                else:
+                    start = (page - 1) * files_per_page
+                    end = start + files_per_page
+                    page_diffs = diffs[start:end]
 
-                for d in diffs:
-                    change_symbol = {"added": "+", "modified": "~", "deleted": "-"}.get(d["change_type"], "?")
-                    result_parts.append(f"{'='*60}")
-                    result_parts.append(f"{change_symbol} {d['change_type'].upper()}: {d['path']}")
-                    result_parts.append(f"{'='*60}")
-                    result_parts.append(d["content"])
+                    result_parts = []
+                    result_parts.append(
+                        f"Showing {len(page_diffs)} of {total_files} changed file(s) "
+                        f"(files {start + 1}-{start + len(page_diffs)}, "
+                        f"page {page} of {total_pages}):"
+                    )
+                    if path:
+                        result_parts.append(f"(filtered to files containing '{path}')")
+                    if max_diff_lines:
+                        result_parts.append(f"(diffs truncated to {max_diff_lines} lines each)")
+                    if total_pages > 1 and page < total_pages:
+                        result_parts.append(
+                            f"(more pages available   call again with page={page + 1})"
+                        )
                     result_parts.append("")
 
-                content = "\n".join(result_parts)
+                    # Backstop: cap the total characters emitted per call.
+                    total_chars = 0
+                    emitted = 0
+                    truncated = False
+                    for d in page_diffs:
+                        change_symbol = {"added": "+", "modified": "~", "deleted": "-"}.get(d["change_type"], "?")
+                        block = "\n".join([
+                            f"{'='*60}",
+                            f"{change_symbol} {d['change_type'].upper()}: {d['path']}",
+                            f"{'='*60}",
+                            d["content"],
+                            "",
+                        ])
+                        if emitted and total_chars + len(block) > MAX_OUTPUT_CHARS:
+                            # Keep at least one file: only stop once something
+                            # has already been emitted.
+                            truncated = True
+                            break
+                        result_parts.append(block)
+                        total_chars += len(block)
+                        emitted += 1
+                    if truncated:
+                        result_parts.append(
+                            f"[output truncated at ~{MAX_OUTPUT_CHARS // 1000}k characters   "
+                            f"narrow the filter with 'path' or reduce 'files_per_page' "
+                            f"(currently {files_per_page})]"
+                        )
+
+                    content = "\n".join(result_parts)
 
         elif view_type == "log":
             commits = git_manager.get_log(max_count=max_count)

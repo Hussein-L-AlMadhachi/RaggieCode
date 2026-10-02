@@ -3,21 +3,23 @@ from dulwich import repo
 from dulwich import objects
 from datetime import datetime
 
+from raggie_dirs import get_raggie_dir_name
+
 RED = "\033[31m"
 RESET = "\033[0m"
 
 
 class GitManager:
-    """Manages git-like operations using dulwich in the .raggie directory."""
-    
+    """Manages git-like operations using dulwich in the raggie data directory."""
+
     def __init__(self, root_dir=None):
         """Initialize the GitManager.
-        
+
         Args:
             root_dir: The root directory of the project. Defaults to current working directory.
         """
         self.root_dir = root_dir or os.getcwd()
-        self.raggie_dir = os.path.join(self.root_dir, ".raggie")
+        self.raggie_dir = os.path.join(self.root_dir, get_raggie_dir_name())
         self.repo_path = os.path.join(self.raggie_dir, "git")
         self._ensure_repo()
     
@@ -144,6 +146,43 @@ class GitManager:
 
         return tree_cache.get('', objects.Tree())
 
+    def has_uncommitted_changes(self):
+        """Check if the working tree differs from the last commit.
+
+        Returns True if there are any added, modified, or deleted files
+        compared to HEAD. Returns False if the working tree matches HEAD
+        or if there are no commits (handled by initial commit logic).
+        """
+        tree = self._get_last_commit_tree()
+        tree_files = self._build_tree_lookup(tree)
+        fs_files = self._collect_fs_files()
+
+        all_paths = set(fs_files.keys()) | set(tree_files.keys())
+        for path in all_paths:
+            fs_id = fs_files.get(path)
+            tree_id = tree_files.get(path)
+            if fs_id != tree_id:
+                return True
+        return False
+
+    def commit_if_changed(self, message):
+        """Commit the current working tree only if it differs from HEAD.
+
+        This prevents creating empty commits that would break /undo on
+        freshly initialized repos (where the initial commit has an empty
+        tree).
+
+        Args:
+            message: The commit message to use if a commit is made.
+
+        Returns:
+            The commit ID if a commit was made, None if there was nothing
+            to commit.
+        """
+        if not self.has_uncommitted_changes():
+            return None
+        return self.commit(message)
+
     def commit(self, message):
         """Commit the current state of the working tree.
 
@@ -216,7 +255,7 @@ class GitManager:
                 # Recurse into subtree (directory)
                 self._restore_tree_recursive(oid, path)
             else:
-                # It's a blob — write the file
+                # It's a blob   write the file
                 blob = obj
                 file_path = os.path.join(self.root_dir, path)
                 os.makedirs(os.path.dirname(file_path), exist_ok=True)
@@ -226,13 +265,15 @@ class GitManager:
     def _delete_working_files(self):
         """Delete all tracked files from the working directory (respecting exclusions).
 
-        Uses the same ignore rules as _walk_filesystem() so that gitignored /
-        aiignored files (e.g. .env, *.db) are never deleted during undo/redo.
+        Uses the same ignore rules as _walk_filesystem() so that gitignored
+        files (e.g. .env, *.db) are never deleted during undo/redo.
         """
         try:
-            from Tools.utils import is_ignored_by_gitignore
+            # Same rule as _walk_filesystem(): tracking follows .gitignore
+            # semantics, .aiignore must not decide what undo/redo deletes.
+            from Tools.utils import is_ignored_by_gitignore_file
         except ImportError:
-            def is_ignored_by_gitignore(_path):
+            def is_ignored_by_gitignore_file(_path):
                 return False
 
         excluded_dirs, excluded_exts = self._get_exclusions()
@@ -245,7 +286,7 @@ class GitManager:
                 if any(file.endswith(ext) for ext in excluded_exts):
                     continue
                 file_path = os.path.join(root, file)
-                if is_ignored_by_gitignore(file_path):
+                if is_ignored_by_gitignore_file(file_path):
                     continue
                 try:
                     os.remove(file_path)
@@ -420,8 +461,21 @@ class GitManager:
     
     def _get_exclusions(self):
         """Return the set of directory names and file extensions to exclude."""
-        excluded_dirs = {'.raggie', '.git', '.venv', '__pycache__', 'build', 'dist', '.egg-info'}
-        excluded_exts = {'.pyc', '.pyo', '.pyd', '.so', '.dll', '.dylib', '.exe'}
+        excluded_dirs = {
+            '.raggie', '.raggie-dev', '.git', '.venv', '__pycache__', 'build',
+            'dist', '.egg-info',
+            # Dependency trees: thousands of files that churn on any package
+            # operation (install/prune) and would flood diffs and bloat
+            # snapshots. Nested .gitignore files are not consulted, so this
+            # hard exclusion is what keeps them out.
+            'node_modules',
+        }
+        excluded_exts = {
+            '.pyc', '.pyo', '.pyd', '.so', '.dll', '.dylib', '.exe',
+            # Databases and their WAL/SHM sidecars must never be snapshotted;
+            # multi-GB blobs break diff rendering and bloat the tracking repo.
+            '.db', '.sqlite', '.sqlite3', '.db-wal', '.db-shm',
+        }
         return excluded_dirs, excluded_exts
     
     def _walk_filesystem(self):
@@ -432,9 +486,11 @@ class GitManager:
         """
         # Import gitignore checker with graceful fallback
         try:
-            from Tools.utils import is_ignored_by_gitignore
+            # Version tracking follows .gitignore semantics: .aiignore (the
+            # agent-exploration filter) must not decide what gets snapshotted.
+            from Tools.utils import is_ignored_by_gitignore_file
         except ImportError:
-            def is_ignored_by_gitignore(_path):
+            def is_ignored_by_gitignore_file(_path):
                 return False
 
         excluded_dirs, excluded_exts = self._get_exclusions()
@@ -445,7 +501,7 @@ class GitManager:
                     continue
                 full_path = os.path.join(root, file)
                 rel_path = os.path.relpath(full_path, self.root_dir)
-                if is_ignored_by_gitignore(full_path):
+                if is_ignored_by_gitignore_file(full_path):
                     continue
                 yield rel_path, full_path
     
@@ -486,17 +542,24 @@ class GitManager:
         _walk(tree)
         return lookup
     
+    MAX_SNAPSHOT_FILE_SIZE = 10 * 1024 * 1024  # 10 MB safety cap
+
     def _collect_fs_files(self, path_filter=None):
         """Walk the filesystem once and return {rel_path: blob_id}.
 
         Uses a single os.walk pass. Returns a dict of relative paths to
-        blob SHA hashes for all files in the root directory.
+        blob SHA hashes for all files in the root directory. Files larger
+        than MAX_SNAPSHOT_FILE_SIZE are skipped: they are almost always
+        artifacts (databases, media, archives) and multi-GB blobs break
+        diff rendering and bloat the tracking repo.
         """
         fs_files = {}
         for rel_path, full_path in self._walk_filesystem():
             if path_filter and path_filter not in rel_path:
                 continue
             try:
+                if os.path.getsize(full_path) > self.MAX_SNAPSHOT_FILE_SIZE:
+                    continue
                 with open(full_path, 'rb') as f:
                     data = f.read()
                 blob = objects.Blob.from_string(data)

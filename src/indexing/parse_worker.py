@@ -35,6 +35,31 @@ import xxhash
 # Global parser cache - initialized once per worker process
 _parsers = {}
 
+# Stylesheet extensions recognized as style imports in JS/TSX files
+STYLE_IMPORT_EXTENSIONS = (".css", ".scss", ".sass", ".less")
+
+
+def _extract_module_specifiers(root_node, source_bytes):
+    """Extract module specifier strings from JS/TS import statements (iterative).
+
+    Returns a list of (specifier, location) tuples, e.g. ("./app.css", {...}).
+    Unlike extract_imports(), which stores the whole statement text, this reads
+    the import statement's `source` field so the raw path is available.
+    """
+    specifiers = []
+    stack = [root_node]
+    while stack:
+        node = stack.pop()
+        if node.type == 'import_statement':
+            source = node.child_by_field_name('source')
+            if source is not None:
+                specifiers.append(
+                    (extract_node_text(source, source_bytes).strip('\'"'), get_node_location(node))
+                )
+            continue
+        stack.extend(node.children)
+    return specifiers
+
 def _get_parser(language):
     """Get or create a parser for the given language (cached per worker)."""
     if language not in _parsers:
@@ -109,6 +134,40 @@ def parse_file(args):
             config = load_frontend_config(str(root_dir))
             return _parse_css_file(file_path, root_dir, source_bytes, content_hash, file_mtime, config)
 
+        # Dispatch Vue/Svelte SFCs to their semantic extractors
+        if language in ("vue", "svelte"):
+            from indexing.frontend_config import load_frontend_config
+            config = load_frontend_config(str(root_dir))
+            if len(source_bytes) > config.max_frontend_file_size:
+                return {
+                    'file_path': str(file_path),
+                    'language': language,
+                    'content_hash': content_hash,
+                    'file_mtime': file_mtime,
+                    'imports': [],
+                    'functions': [],
+                    'classes': [],
+                    'variables': [],
+                    'type_aliases': [],
+                    'structs': [],
+                    'interfaces': [],
+                    'enums': [],
+                    'namespaces': [],
+                    'dependencies': [],
+                    'frontend_components': [],
+                    'markup_elements': [],
+                    'frontend_events': [],
+                    'frontend_bindings': [],
+                    'render_relationships': [],
+                    'style_selector_matches': [],
+                    'frontend_diagnostics': [{
+                        'diagnostic_type': 'file_too_large',
+                        'severity': 'unsupported',
+                        'message': f'{language.upper()} file is {len(source_bytes)} bytes (threshold: {config.max_frontend_file_size}), skipping',
+                    }],
+                }
+            return _parse_sfc_file(file_path, root_dir, source_bytes, content_hash, file_mtime, config, language)
+
         parser = _get_parser(language)
         if parser is None:
             return None
@@ -117,7 +176,7 @@ def parse_file(args):
         root_node = tree.root_node
         source_code = source_bytes.decode('utf-8', errors='ignore')
 
-        # Extract imports — pass source_bytes to avoid whole-source re-encoding
+        # Extract imports   pass source_bytes to avoid whole-source re-encoding
         imports = extract_imports(root_node, source_bytes, language, root_dir)
 
         # Extract symbols
@@ -144,6 +203,19 @@ def parse_file(args):
             jsx_config = load_frontend_config(str(root_dir))
             jsx_data = _extract_jsx_data(source_bytes, language, jsx_config, tree=tree)
 
+        # Surface stylesheet imports (e.g. `import './app.css'`) as style_imports
+        # so scoped selector matching can relate CSS files to their JS/TSX importers
+        style_imports = jsx_data.get('style_imports', [])
+        if frontend_enabled and language in ("tsx", "javascript"):
+            existing_paths = {si.get('import_path') for si in style_imports}
+            for spec, loc in _extract_module_specifiers(root_node, source_bytes):
+                if spec.endswith(STYLE_IMPORT_EXTENSIONS) and spec not in existing_paths:
+                    style_imports.append({
+                        'import_path': spec,
+                        'is_external': spec.startswith(("http://", "https://", "//")),
+                        'source_range': loc,
+                    })
+
         return {
             'file_path': str(file_path),
             'language': language,
@@ -165,6 +237,7 @@ def parse_file(args):
             'frontend_bindings': jsx_data.get('frontend_bindings', []),
             'render_relationships': jsx_data.get('render_relationships', []),
             'style_selector_matches': jsx_data.get('style_selector_matches', []),
+            'style_imports': style_imports,
             'frontend_diagnostics': jsx_data.get('frontend_diagnostics', []),
         }
     except Exception as e:
@@ -192,7 +265,7 @@ def _maybe_extract_arrow_function(node, source_code, var_info, functions, depend
                         "parameters": _extract_arrow_params(vc, source_code),
                         "return_type": None,
                         "docstring": None,
-                        "branch_count": _count_branches_in_node(vc, source_code),
+                        "branch_count": count_branches(vc, "javascript", source_code),
                     }
                     func_index = len(functions)
                     functions.append(func_info)
@@ -220,19 +293,6 @@ def _extract_arrow_params(func_node, source_code):
             # Single param without parens: x => ...
             params.append({"name": extract_node_text(child, source_code), "type": None})
     return params
-
-
-def _count_branches_in_node(node, source_code):
-    """Count if/else/switch/for/while/try branches inside a node (non-recursive)."""
-    count = 0
-    stack = list(node.children)
-    while stack:
-        child = stack.pop()
-        if child.type in ("if_statement", "for_statement", "for_in_statement",
-                          "while_statement", "switch_statement", "try_statement"):
-            count += 1
-        stack.extend(child.children)
-    return count
 
 
 def _extract_symbols(root_node, source_code, language, file_path, root_dir,
@@ -314,7 +374,7 @@ def _extract_symbols(root_node, source_code, language, file_path, root_dir,
     while stack:
         node, in_function, current_class_id, current_namespace = stack.pop()
         
-        # Skip global_statement nodes — already handled in C# top-level pre-pass
+        # Skip global_statement nodes   already handled in C# top-level pre-pass
         if node.type == "global_statement":
             continue
         
@@ -358,8 +418,9 @@ def _extract_symbols(root_node, source_code, language, file_path, root_dir,
                 if language == "dart" and node.parent:
                     body = None
                     found_self = False
+                    node_start, node_end = node.start_byte, node.end_byte
                     for sibling in node.parent.children:
-                        if sibling is node:
+                        if sibling.start_byte == node_start and sibling.end_byte == node_end:
                             found_self = True
                             continue
                         if found_self and sibling.type == "function_body":
@@ -626,7 +687,7 @@ def _extract_symbols(root_node, source_code, language, file_path, root_dir,
             struct_info = extract_struct_info(node, source_code, language)
             if struct_info:
                 structs.append(struct_info)
-                # C# and C++ structs have methods and properties like classes — process their bodies
+                # C# and C++ structs have methods and properties like classes   process their bodies
                 if language in ("csharp", "cpp"):
                     struct_id = len(classes)
                     struct_info['_temp_id'] = struct_id
@@ -651,7 +712,7 @@ def _extract_symbols(root_node, source_code, language, file_path, root_dir,
             iface_info = extract_interface_info(node, source_code, language)
             if iface_info:
                 interfaces.append(iface_info)
-                # C# interfaces have method declarations — process their bodies
+                # C# interfaces have method declarations   process their bodies
                 if language == "csharp":
                     iface_id = len(classes)
                     iface_info['_temp_id'] = iface_id
@@ -714,6 +775,13 @@ def _process_class_body(class_node, source_code, language, class_id,
         if child.type in ["{", "}"]:
             continue
         
+        # Some grammars (e.g. tree-sitter-python) wrap class-body statements
+        # in expression_statement nodes, hiding the assignment node from the
+        # branches below. Unwrap single-child expression statements so class
+        # attributes like `attr = 0` are not silently dropped.
+        if child.type == "expression_statement" and len(child.children) == 1:
+            child = child.children[0]
+        
         if (function_type and child.type in function_type) or \
            (method_type and child.type in method_type):
             func_info = extract_function_info(child, source_code, language, class_type)
@@ -749,7 +817,10 @@ def _process_class_body(class_node, source_code, language, class_id,
                                     functions, classes, variables, dependencies)
         elif assignment_type and child.type in assignment_type:
             var_info = extract_variable_info(child, source_code, language)
-            if var_info and var_info["type"] == "attribute":
+            # Accept both "attribute" (self.x = 1) and "variable" (plain
+            # class-level assignments such as `attr = 0` in Python); both
+            # belong to the class in the index.
+            if var_info and var_info["type"] in ("attribute", "variable"):
                 var_info['parent_class_id'] = class_id
                 variables.append(var_info)
         elif public_field_type and child.type in public_field_type:
@@ -912,25 +983,33 @@ def _parse_html_file(file_path, root_dir, source_bytes, content_hash, file_mtime
     }
 
 
-def _parse_inline_js(content, file_path, offset_line, offset_col):
-    """Parse inline JavaScript content and return extracted symbols.
+def _parse_inline_js(content, file_path, offset_line, offset_col, language="javascript", root_dir=None):
+    """Parse inline script content and return extracted symbols.
 
     Source locations are adjusted by the script's offset within the HTML file
     so that they point to the correct positions in the parent HTML file.
 
     Args:
-        content: JavaScript source text from an inline <script> block.
+        content: Script source text from an inline <script> block.
         file_path: Path of the parent HTML file (for symbol location records).
         offset_line: Starting line of the script content within the HTML file.
         offset_col: Starting column of the script content within the HTML file.
+        language: Script language ('javascript', 'typescript', or 'tsx');
+            used for SFC <script lang="ts"> blocks. Falls back to javascript
+            if the grammar is unavailable.
+        root_dir: Project root (for import externality checks); defaults to
+            the file's parent directory.
 
     Returns:
-        dict with functions, classes, variables, dependencies lists.
+        dict with functions, classes, variables, dependencies, imports lists.
     """
-    result = {"functions": [], "classes": [], "variables": [], "dependencies": []}
+    result = {"functions": [], "classes": [], "variables": [], "dependencies": [], "imports": []}
     try:
         source_bytes = content.encode("utf-8")
-        parser = _get_parser("javascript")
+        parser = _get_parser(language)
+        if parser is None and language != "javascript":
+            language = "javascript"
+            parser = _get_parser(language)
         if parser is None:
             return result
         tree = parser.parse(source_bytes)
@@ -948,9 +1027,12 @@ def _parse_inline_js(content, file_path, offset_line, offset_col):
         dependencies = []
 
         _extract_symbols(
-            root_node, source_code, "javascript", Path(file_path), Path(file_path).parent,
+            root_node, source_code, language, Path(file_path), Path(file_path).parent,
             functions, classes, variables, type_aliases, structs, interfaces, enums, namespaces, dependencies
         )
+
+        script_imports = extract_imports(
+            root_node, source_bytes, language, root_dir or Path(file_path).parent)
 
         def _adjust_location(loc):
             if loc is None:
@@ -977,6 +1059,10 @@ def _parse_inline_js(content, file_path, offset_line, offset_col):
         for dep in dependencies:
             dep["location"] = _adjust_location(dep.get("location"))
             result["dependencies"].append(dep)
+
+        for imp in script_imports:
+            imp["location"] = _adjust_location(imp.get("location"))
+            result["imports"].append(imp)
 
     except Exception:
         pass
@@ -1052,6 +1138,121 @@ def _parse_css_file(file_path, root_dir, source_bytes, content_hash, file_mtime,
         'style_custom_property_usages': frontend_data.get('style_custom_property_usages', []),
         'style_keyframes': frontend_data.get('style_keyframes', []),
         'style_imports': frontend_data.get('style_imports', []),
+        'frontend_diagnostics': frontend_data.get('frontend_diagnostics', []),
+    }
+
+
+def _parse_sfc_file(file_path, root_dir, source_bytes, content_hash, file_mtime, config, language):
+    """Parse a Vue or Svelte single-file component.
+
+    Returns a dict compatible with the standard parse_file output,
+    with additional frontend-specific keys.
+    """
+    if language == "vue":
+        from indexing.frontend.vue_extractor import extract_vue_semantics as extract_sfc
+    else:
+        from indexing.frontend.svelte_extractor import extract_svelte_semantics as extract_sfc
+
+    try:
+        frontend_data = extract_sfc(source_bytes, component_name=file_path.stem, config=config)
+    except Exception as e:
+        return {
+            'file_path': str(file_path),
+            'language': language,
+            'content_hash': content_hash,
+            'file_mtime': file_mtime,
+            'error': f'{language.upper()} extraction failed: {e}',
+            'imports': [],
+            'functions': [],
+            'classes': [],
+            'variables': [],
+            'type_aliases': [],
+            'structs': [],
+            'interfaces': [],
+            'enums': [],
+            'namespaces': [],
+            'dependencies': [],
+            'frontend_components': [],
+            'markup_elements': [],
+            'frontend_events': [],
+            'frontend_bindings': [],
+            'render_relationships': [],
+            'style_selectors': [],
+            'style_custom_properties': [],
+            'style_custom_property_usages': [],
+            'style_imports': [],
+            'style_selector_matches': [],
+            'frontend_diagnostics': [{
+                'diagnostic_type': 'extraction_error',
+                'severity': 'fatal',
+                'message': str(e),
+            }],
+        }
+
+    # External <script src> and <style src> references as imports
+    imports = []
+    for script in frontend_data.get("inline_scripts", []):
+        if script["type"] == "external":
+            imports.append({
+                'name': script['src'],
+                'location': script.get('location'),
+                'is_external': True,
+            })
+    for style_import in frontend_data.get("style_imports", []):
+        imports.append({
+            'name': style_import['import_path'],
+            'location': style_import.get('source_range'),
+            'is_external': style_import.get('is_external', False),
+        })
+
+    # Parse inline scripts (JS/TS) and merge executable symbols and imports
+    functions = []
+    classes = []
+    variables = []
+    dependencies = []
+    for script in frontend_data.get("inline_scripts", []):
+        if script["type"] != "inline":
+            continue
+        content = script.get("content", "")
+        if not content.strip():
+            continue
+        script_loc = script.get("location", {})
+        script_start_line = script_loc.get("start_line", 0)
+        script_start_col = script_loc.get("start_col", 0)
+        js_result = _parse_inline_js(
+            content, str(file_path), script_start_line, script_start_col,
+            language=script.get("script_language", "javascript"), root_dir=root_dir)
+        functions.extend(js_result.get("functions", []))
+        classes.extend(js_result.get("classes", []))
+        variables.extend(js_result.get("variables", []))
+        dependencies.extend(js_result.get("dependencies", []))
+        imports.extend(js_result.get("imports", []))
+
+    return {
+        'file_path': str(file_path),
+        'language': language,
+        'content_hash': content_hash,
+        'file_mtime': file_mtime,
+        'imports': imports,
+        'functions': functions,
+        'classes': classes,
+        'variables': variables,
+        'type_aliases': [],
+        'structs': [],
+        'interfaces': [],
+        'enums': [],
+        'namespaces': [],
+        'dependencies': dependencies,
+        'frontend_components': frontend_data.get('frontend_components', []),
+        'markup_elements': frontend_data.get('markup_elements', []),
+        'frontend_events': frontend_data.get('frontend_events', []),
+        'frontend_bindings': frontend_data.get('frontend_bindings', []),
+        'render_relationships': frontend_data.get('render_relationships', []),
+        'style_selectors': frontend_data.get('style_selectors', []),
+        'style_custom_properties': frontend_data.get('style_custom_properties', []),
+        'style_custom_property_usages': frontend_data.get('style_custom_property_usages', []),
+        'style_imports': frontend_data.get('style_imports', []),
+        'style_selector_matches': frontend_data.get('style_selector_matches', []),
         'frontend_diagnostics': frontend_data.get('frontend_diagnostics', []),
     }
 

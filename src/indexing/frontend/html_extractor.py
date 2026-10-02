@@ -80,7 +80,7 @@ def extract_html_semantics(source_bytes: bytes, config=None) -> dict:
     for i, (elem, parent_idx) in enumerate(all_elements):
         _extract_events_from_element(elem, i, result["frontend_events"])
 
-    # Process <style> blocks — extract selectors and custom properties
+    # Process <style> blocks   extract selectors and custom properties
     style_selectors_list = []
     for style_elem in doc.styles:
         selectors, custom_props, prop_usages = _parse_style_block(style_elem, source_bytes)
@@ -130,7 +130,7 @@ def extract_html_semantics(source_bytes: bytes, config=None) -> dict:
                     "location": script_elem.location.to_dict(),
                 })
             elif script_type == "application/ld+json":
-                # JSON-LD — skip for semantic extraction
+                # JSON-LD   skip for semantic extraction
                 result["frontend_diagnostics"].append({
                     "diagnostic_type": "unsupported_script_type",
                     "severity": "unsupported",
@@ -281,7 +281,7 @@ def _parse_style_block(style_elem: ParsedElement, source_bytes: bytes) -> Tuple[
     property_usages = []
 
     # Simple CSS parsing: extract rule sets and custom property definitions
-    # This is a basic parser — Phase 4 will add full CSS extraction
+    # This is a basic parser   Phase 4 will add full CSS extraction
     _parse_css_rules(css_text, style_elem.location, selectors, custom_properties, property_usages)
 
     return selectors, custom_properties, property_usages

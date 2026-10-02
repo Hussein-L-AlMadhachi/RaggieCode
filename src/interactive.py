@@ -10,15 +10,20 @@ from pathlib import Path
 from prompt_toolkit import prompt
 from rich.console import Console
 from rich.markdown import Markdown
-from rich.live import Live
 
-from Agent.effort_levels import EFFORT_LEVELS, DEFAULT_EFFORT, effort_name
-from Agent.chat_history_db import set_session_effort, get_session_effort, get_session_depth
+from Agent.thinking_modes import THINKING_MODES, DEFAULT_THINKING_MODE, thinking_mode_name
+from Agent import chat_lock
+from Agent.chat_history_db import set_session_thinking_mode, get_session_thinking_mode, get_session_depth
+import io_backend
 
 console = Console()
 GREEN = "\033[32m"
 DIM = "\033[2m"
 RESET = "\033[0m"
+
+# Sentinel returned by run_interactive when the user presses Ctrl+C on the
+# master prompt: the caller should go back to the chat selection screen.
+BACK_TO_CHAT_SELECT = "chat_select"
 
 # Matches @path/to/file.x:23 and @path/to/file.x:23-43. The lookbehind rejects
 # @-mentions embedded in emails/handles, and the mandatory :N suffix ensures
@@ -65,63 +70,76 @@ def expand_file_references(text):
     return text + "\n\n<referenced_code>\n" + "\n\n".join(snippets) + "\n</referenced_code>"
 
 
-def _prompt_effort(session_id, value=None):
-    """Ask the user to pick an effort level and store it on the session."""
-    current = get_session_effort(session_id)
-    default_num = current if current is not None else DEFAULT_EFFORT
+def _name_to_thinking_mode():
+    """Map lowercase thinking mode name -> level number."""
+    return {info["name"].lower(): num for num, info in THINKING_MODES.items()}
 
-    for num, info in EFFORT_LEVELS.items():
+
+def _prompt_thinking_mode(session_id, value=None):
+    """Ask the user to pick a thinking mode and store it on the session."""
+    current = get_session_thinking_mode(session_id)
+    default_num = current if current is not None else DEFAULT_THINKING_MODE
+    default_name = thinking_mode_name(default_num).lower()
+
+    for num, info in THINKING_MODES.items():
         marker = " (selected)" if num == default_num else ""
-        print(f"  {num}. {info['name']}{marker}")
+        print(f"  {info['name'].lower()}{marker}")
+
+    # Predefined options so web clients show clickable choices instead of a
+    # bare text input (io_backend.ask routes them to the ask handler).
+    options = [
+        {"label": info["name"].lower(),
+         **({"description": "current mode"} if num == default_num else {})}
+        for num, info in THINKING_MODES.items()
+    ]
 
     while True:
 
         if value is None:
-            try:
-                print(f"\nEffort level:")
-                choice = prompt(f"Select effort (1-{len(EFFORT_LEVELS)}) [{default_num}]: ").strip()
-            except (EOFError, KeyboardInterrupt):
-                effort = default_num
-                set_session_effort(session_id, effort)
-                return effort
+            print(f"\nThinking mode:")
+            # Route through io_backend.ask: in ACP/headless mode the question
+            # goes to the client (ask handler) or falls back to the default
+            # when nobody can answer. Reading stdin directly here froze the
+            # worker thread forever in web mode (no stdin to read from).
+            choice = io_backend.ask(
+                f"Select thinking mode [{default_name}]: ", options=options
+            ).strip()
         else:
             choice = value
 
         if not choice:
-            effort = default_num
+            mode = default_num
+            break
+        if choice.lower() in _name_to_thinking_mode():
+            mode = _name_to_thinking_mode()[choice.lower()]
             break
         try:
-            effort = int(choice)
+            mode = int(choice)
         except ValueError:
-            print("Invalid number. Try again.")
+            print(f"Unknown mode. Available: {', '.join(info['name'].lower() for info in THINKING_MODES.values())}")
             continue
-        if effort not in EFFORT_LEVELS:
-            print(f"Pick a number between 1 and {len(EFFORT_LEVELS)}.")
+        if mode not in THINKING_MODES:
+            print(f"Available modes: {', '.join(info['name'].lower() for info in THINKING_MODES.values())}")
             continue
         break
 
-    set_session_effort(session_id, effort)
-    return effort
+    set_session_thinking_mode(session_id, mode)
+    return mode
 
 
 class StreamState:
-    """Holds streaming display state across event calls."""
-    __slots__ = ("reasoning_started", "response_started", "live", "accumulated")
+    """Holds display state across event calls."""
+    __slots__ = ("reasoning_started", "response_started")
 
     def __init__(self):
         self.reasoning_started = False
         self.response_started = False
-        self.live = None
-        self.accumulated = ""
 
     def _stop_live(self):
-        if self.live is not None:
-            self.live.stop()
-            self.live = None
         self.response_started = False
 
 
-def _print_event(event, state, depth=0, model=""):
+def _print_event(event, state, depth=0, model="", debug=False):
     """Process a single agent event and update stream state.
 
     Returns the StreamState (mutated in place).
@@ -143,22 +161,27 @@ def _print_event(event, state, depth=0, model=""):
         except Exception:
             console.print(f"[dim][tool] {tool_name}[/dim]")
 
+    elif kind == "tool_result":
+        if debug:
+            state._stop_live()
+            if state.reasoning_started:
+                print(f"{RESET}")
+                state.reasoning_started = False
+            tool_name, content, is_error = event[1], event[2], event[3]
+            label = f"[tool output] {tool_name}" if not is_error else f"[tool error] {tool_name}"
+            style = "dim" if not is_error else "red"
+            console.print(label, style=style, markup=False)
+            if content:
+                console.print(str(content), style=style, markup=False)
+
     elif kind == "reasoning":
         state._stop_live()
         if state.reasoning_started:
             print(f"{RESET}")
             state.reasoning_started = False
         content = event[1]
-        print(f"{DIM}")
+        print(f"{GREEN}\n\nAgent Reasoning:{RESET}")
         console.print(Markdown(content))
-        print(f"{RESET}")
-
-    elif kind == "reasoning_chunk":
-        state._stop_live()
-        if not state.reasoning_started:
-            print(f"{DIM}", end="", flush=True)
-            state.reasoning_started = True
-        print(event[1], end="", flush=True)
 
     elif kind == "response":
         state._stop_live()
@@ -169,37 +192,33 @@ def _print_event(event, state, depth=0, model=""):
         print(f"{GREEN}\n\nAgent ({model}:{depth}):{RESET}")
         console.print(Markdown(content))
 
-    elif kind == "response_chunk":
-        if not state.response_started:
-            if state.reasoning_started:
-                print(f"{RESET}")
-                state.reasoning_started = False
-            print(f"{GREEN}\n\nAgent ({model}:{depth}):{RESET}")
-            state.response_started = True
-            state.live = Live(
-                Markdown(event[1]),
-                console=console,
-                refresh_per_second=12,
-                transient=True,
-            )
-            state.live.start()
-            state.accumulated = event[1]
-        else:
-            state.accumulated += event[1]
-            state.live.update(Markdown(state.accumulated))
-
-    elif kind == "response_end":
-        final_content = state.accumulated
-        state._stop_live()
-        if final_content:
-            console.print(Markdown(final_content))
-
     elif kind == "error":
         state._stop_live()
         if state.reasoning_started:
             print(f"{RESET}")
             state.reasoning_started = False
         print(f"Error: {event[1]}")
+
+    elif kind == "notice":
+        state._stop_live()
+        if state.reasoning_started:
+            print(f"{RESET}")
+            state.reasoning_started = False
+        # Command handler output (captured verbatim, ANSI codes intact);
+        # markup=False so rich doesn't treat [] as markup.
+        console.print(event[1], markup=False, highlight=False)
+
+    elif kind == "handover_doc":
+        state._stop_live()
+        if state.reasoning_started:
+            print(f"{RESET}")
+            state.reasoning_started = False
+        print(f"{GREEN}\n\nAgent handover document:{RESET}")
+        console.print(Markdown(event[1]))
+
+    elif kind == "health_stats":
+        state._stop_live()
+        print(f"\n{event[1]}")
 
     return state
 
@@ -221,7 +240,7 @@ def run_interactive(agent, role):
         depth = get_session_depth(agent.session_id)
         model_name = agent.roles[role].get("model", "unknown")
         for event in agent.resume_dangling_tool_work():
-            state = _print_event(event, state, depth, model_name)
+            state = _print_event(event, state, depth, model_name, debug=agent.debug)
     except KeyboardInterrupt:
         print("\n[interrupted]")
     except EOFError:
@@ -230,52 +249,70 @@ def run_interactive(agent, role):
 
     while True:
         try:
-            current = get_session_effort(agent.session_id)
+            current = get_session_thinking_mode(agent.session_id)
             if current is None:
-                set_session_effort(agent.session_id, DEFAULT_EFFORT)
-                current = DEFAULT_EFFORT
-            print(f"\n{DIM}Effort: {effort_name(current)} - to change it use /effort{RESET}")
+                set_session_thinking_mode(agent.session_id, DEFAULT_THINKING_MODE)
+                current = DEFAULT_THINKING_MODE
+            print(f"\n{DIM}Thinking mode: {thinking_mode_name(current)} - to change it use /thinkingMode{RESET}")
             print(f"{DIM}Press Esc followed by Enter to send message, or type 'exit' to quit{RESET}")
             print(f"{GREEN}\n\nYou:{RESET}")
-            user_input = prompt("> ", multiline=True)
-        except (EOFError, KeyboardInterrupt):
+            io_backend._flush_stdin()
+            user_input = prompt("❯ ", multiline=True)
+        except KeyboardInterrupt:
+            # Ctrl+C on the master prompt: go back to the chat selection screen.
+            print()
+            return BACK_TO_CHAT_SELECT
+        except EOFError:
             print("\n\nAgent: Goodbye!")
-            break
+            return None
 
         if user_input.lower().strip() in ['exit', 'quit']:
-            break
+            return None
 
         if not user_input.strip():
             continue
 
+        # Per-turn lock: hold it only while this single turn runs, so a
+        # second raggie instance can grab the chat between prompts.
+        if not chat_lock.acquire(agent.chat_id):
+            print("This chat is in use by another raggie instance.")
+            continue
         try:
             state = StreamState()
             depth = get_session_depth(agent.session_id)
             model_name = agent.roles[role].get("model", "unknown")
             for event in agent.start(expand_file_references(user_input)):
-                state = _print_event(event, state, depth, model_name)
+                state = _print_event(event, state, depth, model_name, debug=agent.debug)
         except KeyboardInterrupt:
             print("\n[interrupted]")
-            continue
         except EOFError:
             print("\n\nAgent: Goodbye!")
-            break
+            return None
+        finally:
+            # Runs after the generator is fully consumed, raises, or on the
+            # return/continue paths above.
+            chat_lock.release(agent.chat_id)
 
         print()
 
 
-def run_non_interactive(agent, prompt_text, effort=None):
+def run_non_interactive(agent, prompt_text, thinking_mode=None):
     """Run the agent with a single prompt and exit.
 
     Args:
         agent: An Agent instance with tools and commands already set up.
         prompt_text: The user prompt string.
-        effort: Optional effort level number (1-5). Defaults to session's current or DEFAULT_EFFORT.
+        thinking_mode: Optional thinking mode number (1-5). Defaults to session's current or DEFAULT_THINKING_MODE.
     """
-    if effort is not None:
-        set_session_effort(agent.session_id, effort)
-    elif get_session_effort(agent.session_id) is None:
-        set_session_effort(agent.session_id, DEFAULT_EFFORT)
+    if thinking_mode is not None:
+        set_session_thinking_mode(agent.session_id, thinking_mode)
+    elif get_session_thinking_mode(agent.session_id) is None:
+        set_session_thinking_mode(agent.session_id, DEFAULT_THINKING_MODE)
+
+    # Per-turn lock: hold it for the duration of this single turn.
+    if not chat_lock.acquire(agent.chat_id):
+        print("This chat is in use by another raggie instance.", file=sys.stderr)
+        sys.exit(1)
 
     try:
         state = StreamState()
@@ -287,8 +324,11 @@ def run_non_interactive(agent, prompt_text, effort=None):
                     state.reasoning_started = False
                 print(f"Error: {event[1]}", file=sys.stderr)
                 sys.exit(1)
-            state = _print_event(event, state, get_session_depth(agent.session_id), agent.roles[agent.agent_role].get("model", "unknown"))
+            state = _print_event(event, state, get_session_depth(agent.session_id), agent.roles[agent.agent_role].get("model", "unknown"), debug=agent.debug)
     except KeyboardInterrupt:
         print("\n[interrupted]")
     except EOFError:
         print("\nAgent: Goodbye!")
+    finally:
+        # Covers the error-event sys.exit(1) path above as well.
+        chat_lock.release(agent.chat_id)

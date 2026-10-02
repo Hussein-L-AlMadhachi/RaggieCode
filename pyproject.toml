@@ -4,9 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "raggiecode"
-version = "0.2.2"
+version = "1.0.1"
 description = "AI Coding Agent"
 readme = "README.md"
+license = { text = "Apache-2.0" }
 requires-python = ">=3.10"
 dependencies = [
     "tree-sitter==0.25.2",
@@ -23,20 +24,24 @@ dependencies = [
     "tree-sitter-php==0.24.1",
     "tree-sitter-language-pack==1.8.1",
     "rich>=13.7.1",
-    "pathspec==0.12.1",
+    "pathspec>=1.0.0",
     "openai==2.43.0",
     "prompt_toolkit",
     "xxhash",
     "ddgs",
     "dulwich",
     "ripgrep_rs",
+    "agent-client-protocol==0.12.1",
+    "mcp==2.0.0",
+    "yoyo-migrations>=9.0.0",
+    "pyyaml==6.0.3",
 ]
 
 [project.scripts]
 raggie = "raggie:main"
 
 [tool.setuptools]
-py-modules = ["raggie", "cli", "interactive"]
+py-modules = ["raggie", "raggie_dirs", "cli", "interactive", "io_backend", "db_migrations", "mcp_client"]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
@@ -44,6 +49,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 config = ["*"]
+acp_server = ["webui/*", "webui/assets/*"]
 
 [tool.pytest.ini_options]
 norecursedirs = ["_repos", ".git", "dist", "build"]

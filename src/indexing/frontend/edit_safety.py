@@ -129,19 +129,10 @@ def _get_entity_row(conn, entity_type: str, entity_id: int) -> Optional[sqlite3.
 
 
 def _get_file_info(conn, file_path: str) -> Optional[Dict[str, Any]]:
-    """Get file info from the index by path."""
-    normalized = file_path[2:] if file_path.startswith("./") else file_path
-    row = conn.execute(
-        "SELECT id, path, absolute_path, language, content_hash, mtime FROM files WHERE path = ?",
-        (normalized,)
-    ).fetchone()
-    if not row:
-        # Fallback: match by filename
-        filename = os.path.basename(normalized)
-        row = conn.execute(
-            "SELECT id, path, absolute_path, language, content_hash, mtime FROM files WHERE path LIKE ?",
-            (f"%{filename}",)
-        ).fetchone()
+    """Get file info from the index by path. Ambiguous paths resolve to None  
+    edit-safety checks must never act on an arbitrarily-picked file."""
+    from indexing.queries import resolve_file_rows
+    row, _ = resolve_file_rows(conn, file_path)
     return dict(row) if row else None
 
 

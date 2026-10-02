@@ -144,7 +144,7 @@ def _get_function_name(func_node, source_bytes) -> Optional[str]:
             if c.type in ("identifier", "type_identifier"):
                 return extract_range(source_bytes, c.start_byte, c.end_byte)
 
-    # Arrow function or function expression — name is in parent variable_declarator
+    # Arrow function or function expression   name is in parent variable_declarator
     if func_node.type in ("arrow_function", "function_expression", "function"):
         if parent.type == "variable_declarator":
             for i in range(parent.child_count):
@@ -363,7 +363,7 @@ def _is_custom_component(tag_name: str) -> bool:
     """Check if a tag name represents a custom component (capitalized)."""
     if not tag_name:
         return False
-    # Member expressions like Card.Sub — check first part
+    # Member expressions like Card.Sub   check first part
     first_part = tag_name.split(".")[0]
     return first_part[0].isupper() if first_part else False
 
@@ -435,13 +435,13 @@ def _extract_class_names(attr_value, source_bytes) -> Tuple[List[str], str, str]
         if "." in expr and not expr.startswith("(") and not expr.startswith("cn"):
             parts = expr.split(".")
             if len(parts) == 2 and parts[0].isidentifier():
-                return [], "unresolved", expr  # CSS module — Phase 6 resolution
+                return [], "unresolved", expr  # CSS module   Phase 6 resolution
 
-        # Ternary: cond ? 'a' : 'b' — dynamic, not static
+        # Ternary: cond ? 'a' : 'b'   dynamic, not static
         if "?" in expr and ":" in expr:
             return [], "unresolved", expr
 
-        # Function call: cn('btn', loading && 'loading') — dynamic, not static
+        # Function call: cn('btn', loading && 'loading')   dynamic, not static
         if "(" in expr and ")" in expr:
             return [], "unresolved", expr
 
@@ -980,7 +980,7 @@ def extract_jsx_semantics(source_bytes: bytes, language: str = "tsx", config=Non
         portal_diags.append({
             "diagnostic_type": "portal_detected",
             "severity": "unsupported",
-            "message": "React portal detected — portal children may not be in the normal render tree",
+            "message": "React portal detected   portal children may not be in the normal render tree",
         })
 
     # If no JSX nodes, return empty (with portal diagnostic if applicable)
@@ -991,7 +991,7 @@ def extract_jsx_semantics(source_bytes: bytes, language: str = "tsx", config=Non
             diags.append({
                 "diagnostic_type": "parse_error",
                 "severity": "recoverable",
-                "message": "JSX/TSX file has syntax errors — partial or no extraction performed",
+                "message": "JSX/TSX file has syntax errors   partial or no extraction performed",
             })
         return {
             "frontend_components": [],
@@ -1152,7 +1152,7 @@ def extract_jsx_semantics(source_bytes: bytes, language: str = "tsx", config=Non
             result["frontend_diagnostics"].append({
                 "diagnostic_type": "spread_props",
                 "severity": "unsupported",
-                "message": f"Spread props '{b.expression[:50]}' — individual props cannot be resolved",
+                "message": f"Spread props '{b.expression[:50]}'   individual props cannot be resolved",
                 "source_range": b.location.to_dict(),
             })
 
