@@ -69,6 +69,8 @@ Raggie Agent (code) v1.0.1 - Interactive Mode
 
 Thinking mode: Zen - to change it use /thinkingMode
 
+Press Esc followed by Enter to send message, or type 'exit' to quit
+
 You:
 ❯ Add input validation to the login endpoint and update all callers
 
