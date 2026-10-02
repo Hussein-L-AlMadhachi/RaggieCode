@@ -19,7 +19,7 @@ def _fuzzy_score(query: str, target: str):
     if not query:
         return 0
 
-    # Exact substring — best possible match
+    # Exact substring   best possible match
     if query in target:
         return 100 + (len(target) - len(query))
 

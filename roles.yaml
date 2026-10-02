@@ -1,6 +1,6 @@
 code:
   tools:
-    - UglyWholeFileContentDump
+    - WholeFileContentDump
     - ListDir
     - Shell
     - TempBackgroundService
@@ -39,7 +39,7 @@ code:
 
 define-plan:
   tools:
-    - UglyWholeFileContentDump
+    - WholeFileContentDump
     - ListDir
     - GetSymbolSourceCode
     - GetFileCodeSemantics
@@ -59,7 +59,7 @@ define-plan:
 
 refine-plan:
   tools:
-    - UglyWholeFileContentDump
+    - WholeFileContentDump
     - ListDir
     - GetSymbolSourceCode
     - GetFileCodeSemantics

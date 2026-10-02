@@ -11,7 +11,7 @@ from typing import List, Optional
 
 # Default configuration
 DEFAULT_CONFIG = {
-    "enabled_languages": ["html", "css", "javascript", "tsx"],
+    "enabled_languages": ["html", "css", "javascript", "tsx", "vue", "svelte"],
     "generated_dir_exclusions": ["dist", "build", "node_modules", ".next", ".nuxt", "out"],
     "parse_inline_scripts": True,
     "parse_inline_styles": True,
@@ -48,7 +48,7 @@ class FrontendConfig:
 
 
 def load_frontend_config(root_dir) -> FrontendConfig:
-    """Load frontend config from .raggie/frontend_config.json, or fall back to defaults.
+    """Load frontend config from the raggie data dir, or fall back to defaults.
 
     Args:
         root_dir: Project root directory path.
@@ -56,8 +56,8 @@ def load_frontend_config(root_dir) -> FrontendConfig:
     Returns:
         FrontendConfig instance.
     """
-    root_path = Path(root_dir)
-    config_path = root_path / ".raggie" / "frontend_config.json"
+    from raggie_dirs import get_frontend_config_path
+    config_path = get_frontend_config_path(root_dir)
 
     if config_path.exists():
         try:

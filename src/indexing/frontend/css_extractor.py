@@ -36,7 +36,7 @@ def extract_css_semantics(source_bytes: bytes, config=None, file_path: str = "")
             - frontend_diagnostics: list of diagnostic dicts
             - media_queries: list of media query dicts with nested selector info
     """
-    # Detect generated/minified CSS by size threshold — check BEFORE parsing
+    # Detect generated/minified CSS by size threshold   check BEFORE parsing
     # to avoid the expensive tree-sitter parse for files that will be skipped.
     threshold = config.generated_css_threshold if config else 100_000
     file_size = len(source_bytes)

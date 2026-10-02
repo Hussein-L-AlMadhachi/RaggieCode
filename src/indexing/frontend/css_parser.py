@@ -95,7 +95,7 @@ def _classify_selector(selector_text: str) -> str:
         return "pseudo"
     if s.startswith("@"):
         return "at-rule"
-    # Attribute selectors like a[href=...] — tag with attribute
+    # Attribute selectors like a[href=...]   tag with attribute
     if "[" in s and s[0].isalpha():
         return "attribute"
     if "." in s and "#" in s:

@@ -1,7 +1,7 @@
 {
     "code":{
         "tools": [
-            "UglyWholeFileContentDump",
+            "WholeFileContentDump",
             "ListDir",
             "Shell",
             "TempBackgroundService",
@@ -34,9 +34,12 @@
         ],
         "model": "",
         "base_url": "",
+        "provider": "",
         "system_prompt_file": "coder_system_prompt.md",
         "context_window": 200000,
         "reasoning": false,
+        "reasoning_effort": "",
+        "user_agent": "",
         "stream": false,
         "globalTodo": true
     }

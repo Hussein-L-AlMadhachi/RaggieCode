@@ -1,4 +1,4 @@
-from .utils import is_ignored_by_gitignore, is_within_cwd, BLUE, RESET, auto_record_change, reindex_after_change, remove_em_dashes
+from .utils import is_ignored_by_gitignore, is_within_cwd, prompt_path_permission, denial_content, BLUE, RESET, auto_record_change, reindex_after_change
 
 
 def handle(arguments, toolcall_id, session_id=None, code_indexer=None):
@@ -9,21 +9,25 @@ def handle(arguments, toolcall_id, session_id=None, code_indexer=None):
     try:
         # Check if the file is outside the current working directory
         if not is_within_cwd(file_path):
-            return {
-                "role": "tool",
-                "tool_call_id": toolcall_id,
-                "content": "Error: access denied - path is outside the current working directory",
-            }
+            if not prompt_path_permission(
+                file_path, "write", "path is outside the current working directory"
+            ):
+                return {
+                    "role": "tool",
+                    "tool_call_id": toolcall_id,
+                    "content": denial_content("Error: access denied - path is outside the current working directory"),
+                }
 
         # Check if file is in .gitignore
         if is_ignored_by_gitignore(file_path):
-            return {
-                "role": "tool",
-                "tool_call_id": toolcall_id,
-                "content": f"Error: File '{file_path}' is in .gitignore. Operations on gitignored files are not allowed.",
-            }
-
-        content = remove_em_dashes(content)
+            if not prompt_path_permission(
+                file_path, "write", "file is gitignored"
+            ):
+                return {
+                    "role": "tool",
+                    "tool_call_id": toolcall_id,
+                    "content": denial_content(f"Error: File '{file_path}' is in .gitignore. Operations on gitignored files are not allowed."),
+                }
 
         with open(file_path, "w") as f:
             f.write(content)

@@ -6,7 +6,7 @@ import argparse
 from indexing.language_config import LANGUAGE_CONFIG, is_language_available
 
 
-FRONTEND_LANGUAGES = ["html", "css", "tsx", "javascript"]
+FRONTEND_LANGUAGES = ["html", "css", "tsx", "javascript", "vue", "svelte"]
 
 
 def create_argument_parser():
@@ -17,7 +17,7 @@ def create_argument_parser():
         epilog="""
 Supported languages:
   python, go, csharp, javascript, typescript, rust, zig, elixir, cpp
-  Frontend: html, css, tsx (jsx via javascript)
+  Frontend: html, css, tsx (jsx via javascript), vue, svelte
 
 Examples:
   python code_indexer.py .                          # Index all supported languages
@@ -63,7 +63,7 @@ Examples:
         "--frontend",
         action="store_true",
         default=True,
-        help="Enable frontend indexing (HTML, CSS, JSX/TSX) (default: enabled)"
+        help="Enable frontend indexing (HTML, CSS, JSX/TSX, Vue, Svelte) (default: enabled)"
     )
     frontend_group.add_argument(
         "--no-frontend",

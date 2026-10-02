@@ -141,7 +141,7 @@ def traverse_render_graph(
             render_type = row["render_type"]
 
             if child_id is None:
-                # Unresolved reference — add as a leaf
+                # Unresolved reference   add as a leaf
                 parent_node["children"].append({
                     "id": None,
                     "name": child_name,
@@ -174,7 +174,7 @@ def traverse_render_graph(
                 if not is_cycle:
                     queue.append((child_id, node, depth + 1, ancestors | {child_id}))
             else:
-                # Already visited — add as reference
+                # Already visited   add as reference
                 parent_node["children"].append({
                     "id": child_id,
                     "name": child_name,
@@ -365,7 +365,7 @@ def traverse_style_graph(
             "using_elements": elements,
         }
 
-    else:  # to_definition — given an element, find candidate selectors
+    else:  # to_definition   given an element, find candidate selectors
         # selector_id is actually element_id in this direction
         element_id = selector_id
         elem = _get_element(conn, element_id)

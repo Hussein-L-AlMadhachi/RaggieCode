@@ -14,7 +14,7 @@ appear in real-world stylesheets:
 
 Pseudo-classes, pseudo-elements, attribute selectors, and sibling
 combinators are not supported and will cause the matcher to return
-``False`` (safe fallback — the caller simply gets no match from this
+``False`` (safe fallback   the caller simply gets no match from this
 strategy).
 """
 
@@ -60,7 +60,7 @@ def _parse_compound_selector(sel: str) -> Optional[dict]:
             elem_id = m.group(1)
             pos += m.end()
         elif sel[pos] == '*':
-            # Universal selector — matches any tag
+            # Universal selector   matches any tag
             tag = '*'
             pos += 1
         else:
@@ -96,7 +96,7 @@ def _split_by_combinator(selector: str) -> Optional[List[Tuple[str, str]]]:
             parts.append((">", ""))
             i += 1
         elif ch == '~' or ch == '+':
-            # Sibling combinators — unsupported
+            # Sibling combinators   unsupported
             return None
         elif ch.isspace():
             if current.strip():
@@ -153,7 +153,7 @@ def _compound_matches(compound: dict, tag: str, classes: List[str],
         if elem_id != compound["id"]:
             return False
 
-    # Class check — all classes in the selector must be present on the element
+    # Class check   all classes in the selector must be present on the element
     if compound["classes"]:
         elem_class_set = set(classes)
         for c in compound["classes"]:
@@ -194,16 +194,37 @@ def selector_matches_element(selector: str, tag: str, classes: List[str],
     if not parsed:
         return False
 
-    # Single compound selector — direct match
+    # Single compound selector   direct match
     if len(parsed) == 1:
         return _compound_matches(parsed[0][1], tag, classes, elem_id)
 
-    # Multi-part selector with combinators — we only check the final compound
+    # Multi-part selector with combinators   we only check the final compound
     # against the element (we don't have the full DOM tree here).
     # For descendant/child combinators, we check if the last compound matches.
     # Full ancestry matching is done at the caller level where DOM ancestry is available.
     last_compound = parsed[-1][1]
     return _compound_matches(last_compound, tag, classes, elem_id)
+
+
+def split_selector_parts(selector_text: str) -> List[Tuple[str, str]]:
+    """Split a compound selector into (part_type, part_value) pairs.
+
+    part_type is one of 'class', 'id', 'tag'. This mirrors the indexer's
+    compound matching semantics exactly (split on '.'/'#' boundaries, every
+    part must be satisfied). Tag values are lowercased; class/id values are
+    kept as-is. Degenerate parts (e.g. a bare '.') are kept so that a
+    degenerate selector matches nothing rather than everything.
+    """
+    parts = selector_text.replace(".", " .").replace("#", " #").split()
+    result: List[Tuple[str, str]] = []
+    for part in parts:
+        if part.startswith("."):
+            result.append(("class", part[1:]))
+        elif part.startswith("#"):
+            result.append(("id", part[1:]))
+        else:
+            result.append(("tag", part.lower()))
+    return result
 
 
 def selectors_matching_element(selectors: List[str], tag: str,

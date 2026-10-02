@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from indexing.code_index_sdk import CodeIndexSDK
+from raggie_dirs import get_code_index_db_path
 
 
 def search_descriptions(query: str, symbol_types: list = None, limit: int = 50) -> str:
@@ -14,7 +15,7 @@ def search_descriptions(query: str, symbol_types: list = None, limit: int = 50) 
     Returns:
         Formatted string with search results
     """
-    db_path = Path.cwd() / ".raggie" / ".code_index.raggie"
+    db_path = get_code_index_db_path()
     
     if not db_path.exists():
         return f"Error: Code index database not found at {db_path}"
@@ -46,7 +47,7 @@ def get_undocumented_symbols(symbol_types: list = None, file_path: str = None) -
     Returns:
         Formatted string with undocumented symbols
     """
-    db_path = Path.cwd() / ".raggie" / ".code_index.raggie"
+    db_path = get_code_index_db_path()
     
     if not db_path.exists():
         return f"Error: Code index database not found at {db_path}"
@@ -55,7 +56,7 @@ def get_undocumented_symbols(symbol_types: list = None, file_path: str = None) -
         with CodeIndexSDK(str(db_path)) as sdk:
             file_id = None
             if file_path:
-                file = sdk.get_file_by_path(file_path)
+                file, _ = sdk.resolve_file(file_path)
                 if file:
                     file_id = file.id
                 else:
@@ -88,7 +89,7 @@ def find_symbol_location(symbol_name: str, file_path: str = None):
         dict with keys: file_path, start_line, end_line, source, kind
         or None if not found
     """
-    db_path = Path.cwd() / ".raggie" / ".code_index.raggie"
+    db_path = get_code_index_db_path()
 
     if not db_path.exists():
         return None
@@ -97,7 +98,7 @@ def find_symbol_location(symbol_name: str, file_path: str = None):
         with CodeIndexSDK(str(db_path)) as sdk:
             file_id = None
             if file_path:
-                f = sdk.get_file_by_path(file_path)
+                f, _ = sdk.resolve_file(file_path)
                 if f:
                     file_id = f.id
 
@@ -155,7 +156,7 @@ def find_frontend_entity_location(entity_type: str, entity_id: int):
         dict with keys: file_path, start_line, end_line, source, kind
         or None if not found.
     """
-    db_path = Path.cwd() / ".raggie" / ".code_index.raggie"
+    db_path = get_code_index_db_path()
 
     if not db_path.exists():
         return None
@@ -218,7 +219,7 @@ def find_frontend_by_name(name: str, file_path: str = None):
         dict with keys: file_path, start_line, end_line, source, kind, entity_type, entity_id
         or None if not found.
     """
-    db_path = Path.cwd() / ".raggie" / ".code_index.raggie"
+    db_path = get_code_index_db_path()
 
     if not db_path.exists():
         return None
@@ -229,7 +230,7 @@ def find_frontend_by_name(name: str, file_path: str = None):
             conn = sdk.conn
             file_id = None
             if file_path:
-                f = sdk.get_file_by_path(file_path)
+                f, _ = sdk.resolve_file(file_path)
                 if f:
                     file_id = f.id
 
@@ -362,7 +363,7 @@ def find_frontend_entity(entity_type: str, name: str, file_path: str = None):
         return find_frontend_by_name(name, file_path)
     if entity_type == "custom_property":
         return find_frontend_by_name(name, file_path)
-    # For markup_element, event_binding, property_binding — search by name in respective tables
+    # For markup_element, event_binding, property_binding   search by name in respective tables
     return find_frontend_by_name(name, file_path)
 
 
@@ -376,7 +377,7 @@ def find_symbol_implementation(symbol_name: str, file_path: str = None) -> str:
     Returns:
         Source code string of the symbol, or error message if not found
     """
-    db_path = Path.cwd() / ".raggie" / ".code_index.raggie"
+    db_path = get_code_index_db_path()
     
     if not db_path.exists():
         return f"Error: Code index database not found at {db_path}"
@@ -398,13 +399,18 @@ def find_symbol_implementation(symbol_name: str, file_path: str = None) -> str:
             if variable_body:
                 return variable_body
 
+            # Try to find as a type-level declaration (interface, type alias, enum, struct)
+            type_body = sdk.get_type_body(symbol_name, file_path)
+            if type_body:
+                return type_body
+
             # Search for similar symbols by name and description
             matches = sdk.search_symbols(symbol_name, limit=10)
             
             if matches:
                 lines = [f"Symbol '{symbol_name}' not found by exact name. Similar symbols:"]
                 for m in matches:
-                    desc_suffix = f" — {m['description']}" if m.get('description') else ""
+                    desc_suffix = f"   {m['description']}" if m.get('description') else ""
                     lines.append(f"  - {m['type']}: {m['name']} in {m['file_path']} ({m['match_reason']}){desc_suffix}")
                 return "\n".join(lines)
             

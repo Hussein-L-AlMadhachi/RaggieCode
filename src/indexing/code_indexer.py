@@ -9,8 +9,9 @@ import json
 import os
 import time
 import threading
+import sqlite3
 import queue as queue_mod
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
 from pathlib import Path
 import xxhash
 
@@ -29,6 +30,7 @@ from indexing.export_to_json import export_to_json
 from indexing.code_index_sdk import CodeIndexSDK
 from indexing.parse_worker import parse_file
 from indexing.frontend.resolver import normalize_import_path, load_path_aliases, FrontendResolver
+from indexing.frontend.css_selector_utils import split_selector_parts
 
 
 VAR_DATA = "this is to test the indexer"
@@ -39,19 +41,22 @@ class CodeIndexer:
         self.languages = languages if languages else list(LANGUAGE_CONFIG.keys())
         self.frontend_enabled = frontend_enabled
         if not frontend_enabled:
-            frontend_langs = {"html", "css", "tsx"}
+            frontend_langs = {"html", "css", "tsx", "vue", "svelte"}
             self.languages = [l for l in self.languages if l not in frontend_langs]
         self.parsers = {}
         self.db_path = db_path
-        self.conn = None
-        self.cursor = None
-        self.current_file_id = None
-        self.current_class_id = None
+        # Eager typed init so pyright sees non-Optional attributes.
+        # The connection is reopened with check_same_thread=False in
+        # _initialize_database() (matching its existing reopen semantics).
+        self.conn: sqlite3.Connection = sqlite3.connect(self.db_path)
+        self.cursor: sqlite3.Cursor = self.conn.cursor()
+        self.current_file_id: int | None = None
+        self.current_class_id: int | None = None
         self.force_reindex = force_reindex
         self.batch_size = 50000
         self.verbose = verbose
         self.path_aliases = {}  # loaded lazily on first frontend insert
-        
+
         # Statistics counters
         self.stats = {
             "total_functions": 0,
@@ -66,7 +71,7 @@ class CodeIndexer:
             "total_namespaces": 0,
             "skipped_files": 0
         }
-        
+
         # Batch buffers for executemany()
         self.batches = {
             "files": [],
@@ -78,10 +83,10 @@ class CodeIndexer:
             "interfaces": [],
             "dependencies": []
         }
-        
+
         self._initialize_database()
         self._initialize_parsers()
-    
+
     def _flush_batches(self):
         """Flush all batch buffers using executemany()."""
         if self.batches["variables"]:
@@ -121,7 +126,6 @@ class CodeIndexer:
         # init_database creates schema and returns a connection
         init_database(self.db_path)
         # Reopen with check_same_thread=False so the writer thread can use it
-        import sqlite3
         self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         # Optimized settings for batch indexing
         self.conn.execute("PRAGMA journal_mode = MEMORY")
@@ -199,7 +203,7 @@ class CodeIndexer:
             )
             dependent_file_ids.update(row[0] for row in cursor.fetchall())
 
-        # Frontend: render_relationships — files containing parent components
+        # Frontend: render_relationships   files containing parent components
         # that render this file's components as children
         if component_ids:
             placeholders = ','.join('?' * len(component_ids))
@@ -212,14 +216,14 @@ class CodeIndexer:
             )
             dependent_file_ids.update(row[0] for row in cursor.fetchall())
 
-        # Frontend: style_imports — files that import this file via @import or <link>
+        # Frontend: style_imports   files that import this file via @import or <link>
         cursor.execute(
             "SELECT DISTINCT si.file_id FROM style_imports si WHERE si.resolved_file_id = ?",
             (file_id,)
         )
         dependent_file_ids.update(row[0] for row in cursor.fetchall())
 
-        # Frontend: style_custom_property_usages — files that use this file's custom properties
+        # Frontend: style_custom_property_usages   files that use this file's custom properties
         if custom_property_ids:
             placeholders = ','.join('?' * len(custom_property_ids))
             cursor.execute(
@@ -228,7 +232,7 @@ class CodeIndexer:
             )
             dependent_file_ids.update(row[0] for row in cursor.fetchall())
 
-        # Frontend: frontend_events — files whose events reference this file's handler functions
+        # Frontend: frontend_events   files whose events reference this file's handler functions
         if function_ids:
             placeholders = ','.join('?' * len(function_ids))
             cursor.execute(
@@ -237,7 +241,7 @@ class CodeIndexer:
             )
             dependent_file_ids.update(row[0] for row in cursor.fetchall())
 
-        # Frontend: style_selector_matches — bidirectional
+        # Frontend: style_selector_matches   bidirectional
         # When a CSS file changes (selectors), files containing matched elements need re-resolution
         if selector_ids:
             placeholders = ','.join('?' * len(selector_ids))
@@ -341,6 +345,13 @@ class CodeIndexer:
             "OR element_id IN (SELECT id FROM markup_elements WHERE file_id = ?)",
             (file_id, file_id)
         )
+        # Normalized helper tables
+        cursor.execute("DELETE FROM markup_element_classes WHERE file_id = ?", (file_id,))
+        cursor.execute(
+            "DELETE FROM style_selector_parts WHERE selector_id IN "
+            "(SELECT id FROM style_selectors WHERE file_id = ?)",
+            (file_id,)
+        )
         # Tables with direct file_id column
         for table in ("functions", "classes", "variables", "type_aliases", "structs", "interfaces", "dependencies", "temp_symbols", "namespaces",
                        "frontend_components", "markup_elements", "style_selectors", "style_custom_properties",
@@ -425,6 +436,16 @@ class CodeIndexer:
                 f"OR element_id IN (SELECT id FROM markup_elements WHERE file_id IN ({placeholders}))",
                 chunk + chunk
             )
+            # Normalized helper tables
+            cursor.execute(
+                f"DELETE FROM markup_element_classes WHERE file_id IN ({placeholders})",
+                chunk
+            )
+            cursor.execute(
+                f"DELETE FROM style_selector_parts WHERE selector_id IN "
+                f"(SELECT id FROM style_selectors WHERE file_id IN ({placeholders}))",
+                chunk
+            )
             # Tables with direct file_id column
             for table in ("functions", "classes", "variables", "type_aliases", "structs", "interfaces", "dependencies", "temp_symbols", "namespaces",
                            "frontend_components", "markup_elements", "style_selectors", "style_custom_properties",
@@ -502,17 +523,18 @@ class CodeIndexer:
             return
 
     def _insert_parsed_file_inner(self, data, file_id):
-        """Inner insertion logic — called within a SAVEPOINT."""
+        """Inner insertion logic   called within a SAVEPOINT."""
         
         # Insert imports
         for imp in data.get('imports', []):
             self._insert_import(imp['name'], imp['location'], imp.get('is_external', True))
         
-        # Insert classes first (so methods can reference them) — batch
+        # Insert classes first (so methods can reference them)   batch
         class_id_map = {}  # temp_id -> real_id
         class_names = []
         class_temp_ids = []
         class_rows = []
+
         for cls in data.get('classes', []):
             temp_id = cls.pop('_temp_id', None)
             class_temp_ids.append(temp_id)
@@ -525,6 +547,7 @@ class CodeIndexer:
             ))
             self.stats["total_classes"] += 1
             class_names.append(cls['name'])
+
         if class_rows:
             self.cursor.executemany(
                 """INSERT INTO classes (file_id, parent_id, name, location, base_classes, docstring, namespace)
@@ -542,7 +565,7 @@ class CodeIndexer:
                 if temp_id is not None:
                     class_id_map[temp_id] = real_id
         
-        # Insert functions/methods — batch
+        # Insert functions/methods   batch
         func_id_map = {}
         func_names = []
         func_rows = []
@@ -685,7 +708,7 @@ class CodeIndexer:
         # Dependencies are inserted as external with temp_symbols.
         # Resolution happens in _resolve_all_dependencies after all files are indexed.
         
-        # Insert dependencies — all as external with temp_symbols.
+        # Insert dependencies   all as external with temp_symbols.
         # Resolution happens in a single batch pass after all files are indexed.
         # This avoids 7+ SELECT IN queries per file against tables that grow to millions of rows.
         deps = data.get('dependencies', [])
@@ -758,7 +781,7 @@ class CodeIndexer:
         """
         # Lazily load path aliases on first frontend insert
         if not hasattr(self, '_path_aliases_loaded'):
-            self.path_aliases = load_path_aliases(self.root_dir)
+            self.path_aliases = load_path_aliases(str(self.root_dir))
             self._path_aliases_loaded = True
 
         # Get the file path for import normalization
@@ -794,10 +817,11 @@ class CodeIndexer:
             self.cursor.execute(
                 """INSERT INTO frontend_components
                    (file_id, name, framework, source_range, is_exported, impl_function_id, impl_class_id)
-                   VALUES (?, ?, 'react', ?, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (
                     file_id,
                     comp['name'],
+                    comp.get('framework', 'react'),
                     json.dumps(comp.get('source_range')) if comp.get('source_range') else None,
                     1 if comp.get('is_exported') else 0,
                     impl_func_id,
@@ -841,8 +865,20 @@ class CodeIndexer:
             )
             elem_id_map[i] = self.cursor.lastrowid
 
+        # Populate normalized class rows for SQL-based selector matching
+        if elem_id_map:
+            self.cursor.execute(
+                """INSERT INTO markup_element_classes (element_id, file_id, class_name)
+                   SELECT me.id, me.file_id, je.value
+                   FROM markup_elements me, json_each(me.static_classes) je
+                   WHERE me.file_id = ? AND json_valid(me.static_classes)
+                     AND json_type(me.static_classes) = 'array'""",
+                (file_id,)
+            )
+
         # Insert style selectors
         selector_id_map = {}  # index -> db id
+        selector_part_rows = []
         for i, sel in enumerate(data.get('style_selectors', [])):
             self.cursor.execute(
                 """INSERT INTO style_selectors
@@ -858,6 +894,14 @@ class CodeIndexer:
                 )
             )
             selector_id_map[i] = self.cursor.lastrowid
+            if sel['selector_type'] == 'compound':
+                for part_type, part_value in split_selector_parts(sel['selector_text']):
+                    selector_part_rows.append((selector_id_map[i], part_type, part_value))
+        if selector_part_rows:
+            self.cursor.executemany(
+                "INSERT INTO style_selector_parts (selector_id, part_type, part_value) VALUES (?, ?, ?)",
+                selector_part_rows
+            )
 
         # Insert style custom properties
         for cp in data.get('style_custom_properties', []):
@@ -1486,8 +1530,8 @@ class CodeIndexer:
         # while a dedicated writer thread handles DB inserts.
         # This eliminates the sawtooth utilization pattern where workers
         # sit idle while the main process does serial DB inserts.
+        t_parse_start = time.perf_counter()
         if files_to_reindex:
-            t_parse_start = time.perf_counter()
             worker_args = [(str(fp), str(self.root_dir), self.frontend_enabled) for fp in files_to_reindex]
             max_workers = min(os.cpu_count() or 4, len(worker_args), 16)
             window_size = max_workers * 4  # Keep workers fed with a sliding window
@@ -1497,10 +1541,14 @@ class CodeIndexer:
             insert_errors = []
             
             def _writer_loop():
-                """Dedicated writer thread — pulls parsed results and inserts into DB."""
+                """Dedicated writer thread   pulls parsed results and inserts into DB."""
+                # Commit periodically to bound the in-memory rollback journal and
+                # page cache (journal_mode=MEMORY keeps every dirty page in RAM
+                # until commit, so one giant transaction balloons memory).
+                files_since_commit = 0
                 while True:
                     result = write_queue.get()
-                    if result is None:  # sentinel — we're done
+                    if result is None:  # sentinel   we're done
                         write_queue.task_done()
                         break
                     if 'error' in result:
@@ -1510,6 +1558,10 @@ class CodeIndexer:
                         continue
                     try:
                         self._insert_parsed_file(result)
+                        files_since_commit += 1
+                        if files_since_commit >= 500:
+                            self._flush_batches()
+                            files_since_commit = 0
                     except Exception as e:
                         insert_errors.append(e)
                         if self.verbose:
@@ -1525,24 +1577,27 @@ class CodeIndexer:
             with ProcessPoolExecutor(max_workers=max_workers) as executor:
                 # Submit initial window
                 futures = {}
-                arg_iter = iter(worker_args)
+                next_i = 0
                 for _ in range(min(window_size, len(worker_args))):
-                    arg = next(arg_iter)
+                    arg = worker_args[next_i]
+                    next_i += 1
                     futures[executor.submit(parse_file, arg)] = arg
 
                 while futures:
-                    # Wait for any one to complete
-                    done = next(as_completed(futures))
-                    del futures[done]
-                    result = done.result()
-                    # Feed to writer thread (blocks if queue is full — backpressure)
-                    write_queue.put(result)
-                    # Immediately submit next file to keep workers fed
-                    try:
-                        arg = next(arg_iter)
+                    # Wait for any one to complete. NOTE: wait(FIRST_COMPLETED)
+                    # instead of next(as_completed(...))   the latter re-registers
+                    # a completion waiter on every pending future each iteration,
+                    # costing O(files × window) callback bookkeeping.
+                    done_set, _ = wait(list(futures), return_when=FIRST_COMPLETED)
+                    for done in done_set:
+                        del futures[done]
+                        # Feed to writer thread (blocks if queue is full   backpressure)
+                        write_queue.put(done.result())
+                    # Top up the window to keep workers fed
+                    while next_i < len(worker_args) and len(futures) < window_size:
+                        arg = worker_args[next_i]
+                        next_i += 1
                         futures[executor.submit(parse_file, arg)] = arg
-                    except StopIteration:
-                        pass
 
             # Wait for writer to finish all remaining inserts
             write_queue.put(None)
@@ -1587,7 +1642,7 @@ class CodeIndexer:
             # Clean up traditional dependency temp_symbols
             self.cursor.execute("DELETE FROM dependencies WHERE temp_symbol_id IS NOT NULL")
             # Clean up all remaining temp_symbols (including frontend types: component_reference,
-            # custom_property_reference, css_module_class_reference — these are external/missing)
+            # custom_property_reference, css_module_class_reference   these are external/missing)
             self.cursor.execute("DELETE FROM temp_symbols")
             self.conn.commit()
 
@@ -1672,15 +1727,13 @@ class CodeIndexer:
 
     def save_index(self, output_file=None):
         """Commit and optionally close the database connection. Data is already saved during indexing."""
-        if self.conn:
-            self.conn.commit()
-            if self.verbose:
-                print(f"\nDatabase saved to {self.db_path}")
+        self.conn.commit()
+        if self.verbose:
+            print(f"\nDatabase saved to {self.db_path}")
 
     def close(self):
         """Close the database connection."""
-        if self.conn:
-            self.conn.close()
+        self.conn.close()
 
 
 def main():

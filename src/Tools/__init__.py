@@ -5,7 +5,7 @@ def setup_toolcalls(registry: ToolRegistry):
     from skills.tool import handle as update_skill_handle
     from skills.tool import handle_get_skill as get_skill_handle
 
-    registry.set_handler("UglyWholeFileContentDump", read.handle)
+    registry.set_handler("WholeFileContentDump", read.handle)
     registry.set_handler("SearchAllFilesContent", search.handle)
     registry.set_handler("FileNameSearch", fuzzy_search.handle)
     registry.set_handler("ListDir", list_dir.handle)

@@ -57,6 +57,7 @@ def extract_name(node, source_code, language=None):
             # Stop if we've gone past the name (parameters start)
             if child.type in ["formal_parameters", "function_value_parameters"]:
                 break
+
     elif node.type == "method_declaration":
         if language == "go":
             # Go method: func (recv *Type) Name() - name is field_identifier
@@ -65,6 +66,7 @@ def extract_name(node, source_code, language=None):
                     return extract_node_text(child, source_code)
                 if child.type == "identifier":
                     return extract_node_text(child, source_code)
+
         # C# method declaration - look for identifier
         for child in node.children:
             if child.type == "identifier":
@@ -72,6 +74,7 @@ def extract_name(node, source_code, language=None):
             # Stop if we've gone past the name (parameters start)
             if child.type == "parameter_list":
                 break
+
     elif node.type == "class_declaration":
         # For classes, look for type_identifier
         for child in node.children:
@@ -79,6 +82,7 @@ def extract_name(node, source_code, language=None):
                 return extract_node_text(child, source_code)
             if child.type == "class_heritage":
                 break
+
     elif node.type in ("function_definition", "declaration") and language in ("cpp", "c"):
         # C++ function_definition: name is inside function_declarator or declarator
         for child in node.children:
@@ -90,18 +94,22 @@ def extract_name(node, source_code, language=None):
                     if n.type in ("identifier", "field_identifier"):
                         return extract_node_text(n, source_code)
                     stack.extend(reversed(list(n.children)))
+
     elif node.type == "class_specifier" and language == "cpp":
         # C++ class_specifier: name is a type_identifier child
         for child in node.children:
             if child.type == "type_identifier":
                 return extract_node_text(child, source_code)
+
     elif node.type == "type_declaration" and language == "go":
         return extract_go_type_name(node, source_code)
+
     elif node.type == "struct_specifier" and language in ("cpp", "c"):
         # C/C++ struct_specifier: name is a type_identifier child
         for child in node.children:
             if child.type == "type_identifier":
                 return extract_node_text(child, source_code)
+
     elif node.type == "enum_specifier" and language in ("cpp", "c"):
         # C/C++ enum_specifier: name is a type_identifier child
         for child in node.children:
@@ -454,10 +462,52 @@ def extract_go_type_kind(node, source_code):
     return "type_alias"
 
 
+# ---------------------------------------------------------------------------
+# Branch complexity weighting
+#
+# Controls how branch-nesting depth maps to the weight added per branch.
+#   "linear":    weight = depth          (top=1, +1 each level)
+#   "flat":      weight = 1              (no nesting penalty, pure branch count)
+#   "sqrt":      weight = sqrt(depth)    (mild nesting penalty DEFAULT)
+#   "quadratic": weight = depth ** 2     (harsh nesting penalty)
+#
+# Change this single variable to tune how much nested branching contributes
+# to the overall complexity score.
+# ---------------------------------------------------------------------------
+NESTING_WEIGHT_MODE = "sqrt"
+
+
+def _branch_weight(depth, mode=NESTING_WEIGHT_MODE):
+    """Map a branch-nesting depth to its weight contribution."""
+    if depth <= 0:
+        return 0
+    if mode == "flat":
+        return 1
+    if mode == "sqrt":
+        import math
+        return round(math.sqrt(depth), 1)
+    if mode == "quadratic":
+        return depth * depth
+    return depth  # "linear" (default)
+
+
 def count_branches(node, language, source_code=None):
-    """Count the number of conditional branches in a function body (iterative)."""
+    """Weighted branch count for a function body (iterative, no recursion).
+
+    Each branching construct (if/for/while/switch/try/match/etc.) contributes
+    its branch-nesting depth to the total. A top-level branch adds +1, a branch
+    nested inside one other branch adds +2, and so on. This produces a
+    complexity score that penalises deeply nested control flow.
+
+    Example:
+        if a:           # depth 1, +1
+            if b:       # depth 2, +2
+                if c:   # depth 3, +3
+                    pass
+        # total = 6
+    """
     branch_count = 0
-    
+
     branch_types = {
         'python': ['if_statement', 'for_statement', 'while_statement', 'match_statement', 'try_statement'],
         'go': ['if_statement', 'for_statement', 'for_range_clause', 'switch_statement', 'select_statement'],
@@ -474,14 +524,17 @@ def count_branches(node, language, source_code=None):
         'java': ['if_statement', 'for_statement', 'enhanced_for_statement', 'while_statement', 'switch_statement', 'try_statement', 'try_with_resources_statement', 'do_statement'],
         'kotlin': ['if_expression', 'for_statement', 'while_statement', 'do_while_statement', 'when_expression', 'try_expression']
     }
-    
+
     lang_branch_types = branch_types.get(language, ['if_statement', 'for_statement', 'while_statement', 'switch_statement'])
-    
+
     elixir_branch_keywords = {'if', 'case', 'cond', 'try', 'receive', 'for', 'with', 'unless'}
-    
-    stack = [node]
+
+    # Stack entries are (node, branch_depth) where branch_depth is the number
+    # of enclosing branch nodes. The root function node starts at depth 0.
+    stack = [(node, 0)]
     while stack:
-        n = stack.pop()
+        n, depth = stack.pop()
+        is_branch = False
         if n.type in lang_branch_types:
             if language == 'elixir' and n.type == 'call':
                 first_ident = None
@@ -490,11 +543,115 @@ def count_branches(node, language, source_code=None):
                         first_ident = extract_node_text(child, source_code)
                         break
                 if first_ident in elixir_branch_keywords:
-                    branch_count += 1
+                    is_branch = True
             else:
-                branch_count += 1
-        stack.extend(reversed(list(n.children)))
-    
+                is_branch = True
+
+        child_depth = depth + 1 if is_branch else depth
+        if is_branch:
+            branch_count += _branch_weight(child_depth)
+
+        stack.extend((child, child_depth) for child in reversed(list(n.children)))
+
+    return branch_count
+
+
+def count_macro_branches(node, language, source_code=None):
+    """Count branches in a macro definition, treating the macro body as a function.
+
+    C/C++ macros (preproc_def / preproc_function_def): the body is a raw
+    ``preproc_arg`` node.  We extract its text, wrap it in a dummy function,
+    re-parse, and run :func:`count_branches` on the resulting function node.
+
+    Rust macros (macro_definition): the body is a ``token_tree`` containing
+    keyword tokens (``if``, ``for``, ``while``, ``match``, ``loop``).  We walk
+    the token-tree structure iteratively, tracking branch-nesting depth the
+    same way :func:`count_branches` does.
+
+    Returns 0 when the body is empty or cannot be parsed.
+    """
+    if language in ("c", "cpp"):
+        return _count_c_macro_branches(node, language, source_code)
+    if language == "rust":
+        return _count_rust_macro_branches(node, source_code)
+    return 0
+
+
+def _count_c_macro_branches(node, language, source_code):
+    """Re-parse a C/C++ macro body as a function and count branches."""
+    # Find the preproc_arg child (the macro body)
+    preproc_arg = None
+    for child in node.children:
+        if child.type == "preproc_arg":
+            preproc_arg = child
+            break
+    if preproc_arg is None:
+        return 0
+
+    body_text = extract_node_text(preproc_arg, source_code)
+    if not body_text or not body_text.strip():
+        return 0
+
+    # Wrap the macro body in a dummy function so tree-sitter parses it as C
+    wrapped = f"void __m__() {{ {body_text} }}".encode("utf-8")
+
+    from indexing.language_config import LANGUAGE_CONFIG
+    lang_module = LANGUAGE_CONFIG.get(language, {}).get("language_module")
+    if lang_module is None:
+        return 0
+    parser = create_parser(lang_module)
+    if parser is None:
+        return 0
+
+    tree = parser.parse(wrapped)
+    # Find the function_definition node
+    func_node = None
+    stack = [tree.root_node]
+    while stack:
+        n = stack.pop()
+        if n.type == "function_definition":
+            func_node = n
+            break
+        stack.extend(n.children)
+    if func_node is None:
+        return 0
+
+    return count_branches(func_node, language, wrapped)
+
+
+def _count_rust_macro_branches(node, source_code):
+    """Count branch keywords in a Rust macro_definition token_tree (iterative).
+
+    Uses a BFS queue over token_tree nodes.  Within each token_tree, children
+    are scanned left-to-right: when a branch keyword (if/for/while/match/loop)
+    is seen, the next token_tree sibling is treated as that branch's body and
+    its contents are processed at depth+1.
+    """
+    rust_macro_branch_types = {"if", "for", "while", "match", "loop"}
+    branch_count = 0
+
+    # Collect initial token_tree nodes from macro_rule children
+    from collections import deque
+    queue = deque()
+    for child in node.children:
+        if child.type == "macro_rule":
+            for mc in child.children:
+                if mc.type == "token_tree":
+                    queue.append((mc, 0))
+
+    while queue:
+        tt, depth = queue.popleft()
+        saw_branch = False
+        for child in tt.children:
+            if child.type in rust_macro_branch_types:
+                branch_count += _branch_weight(depth + 1)
+                saw_branch = True
+            elif child.type == "token_tree":
+                child_depth = depth + 1 if saw_branch else depth
+                queue.append((child, child_depth))
+                saw_branch = False
+            # Non-keyword, non-token_tree tokens don't reset saw_branch
+
     return branch_count
 
 
@@ -1095,9 +1252,9 @@ def create_parser(language_module):
     if callable(language_module):
         lang_obj = language_module()
         
-        # New API: PyCapsule — wrap in Language() then pass to Parser
+        # New API: PyCapsule   wrap in Language() then pass to Parser
         if isinstance(lang_obj, int):
-            # Old-style int pointer — try tree_sitter_language_pack to avoid deprecation
+            # Old-style int pointer   try tree_sitter_language_pack to avoid deprecation
             # This shouldn't normally happen if language_config uses the right modules
             return Parser(Language(lang_obj))
         
@@ -1105,7 +1262,7 @@ def create_parser(language_module):
         if isinstance(lang_obj, Language):
             return Parser(lang_obj)
         
-        # PyCapsule — wrap in Language()
+        # PyCapsule   wrap in Language()
         return Parser(Language(lang_obj))
     
     # Fallback: treat as raw pointer

@@ -1,8 +1,8 @@
 {
-    "UglyWholeFileContentDump": {
+    "WholeFileContentDump": {
         "type": "function",
         "function": {
-            "name": "UglyWholeFileContentDump",
+            "name": "WholeFileContentDump",
             "description": "Read and return an ugly dump of the WHOLE CONTENT of a file. use this ONLY WHEN NECESSARY. This tool is heavily throttled. Files matched by .gitignore return an explicit error from the tool. For code exploration, consider using GetFileCodeStructure, GetSymbolSourceCode, or WalkCallTree first those are unlimited and free to use as much as you want",
             "parameters": {
                 "type": "object",
@@ -42,7 +42,7 @@
         "type": "function",
         "function": {
             "name": "Shell",
-            "description": "Execute a shell command via subprocess. Returns stdout on success; on failure returns stderr with the exit code. The command is killed if it exceeds the timeout (default 30 seconds). NEVER use this to write or edit files (use WriteFile/ReplaceText instead). NEVER use this to read files that are in .gitignore. For long-running commands, use TempBackgroundService instead.",
+            "description": "Execute a shell command. Response includes 'exit_code' (0=success, non-zero=failure, null=not run). Timeout default 30s. NEVER use to write/edit files (use WriteFile/ReplaceText). NEVER read gitignored files. For long-running commands use TempBackgroundService.",
             "parameters": {
                 "type": "object",
                 "required": ["command"],
@@ -63,7 +63,7 @@
         "type": "function",
         "function": {
             "name": "TempBackgroundService",
-            "description": "Start a TEMPORARY background service (non-blocking). Designed for short-lived dev servers, watch processes, or other long-running services that need to stay alive while you do other work. Returns a PID that can be used with ShellKill to terminate the process. Applies the same sandbox and gitignore restrictions as Shell. Requires user confirmation. stdout and stderr are captured to temp files and returned when the process is killed. STRONGLY DISCOURAGED for: (1) normal shell commands whose output you need — use Shell instead, (2) installing dependencies (pip install, npm install, etc.) — use Shell instead, (3) build/test commands — use Shell instead. Only use this when the process MUST keep running in the background while you perform other tasks.",
+            "description": "Start a TEMPORARY background service (non-blocking). Designed for short-lived dev servers, watch processes, or other long-running services that need to stay alive while you do other work. Returns a PID that can be used with ShellKill to terminate the process. Applies the same sandbox and gitignore restrictions as Shell. Requires user confirmation. stdout and stderr are captured to temp files and returned when the process is killed. STRONGLY DISCOURAGED for: (1) normal shell commands whose output you need   use Shell instead, (2) installing dependencies (pip install, npm install, etc.)   use Shell instead, (3) build/test commands   use Shell instead. Only use this when the process MUST keep running in the background while you perform other tasks.",
             "parameters": {
                 "type": "object",
                 "required": ["command"],
@@ -118,7 +118,7 @@
         "type": "function",
         "function": {
             "name": "ReplaceText",
-            "description": "Find and replace text in an existing file. Returns a unified-diff-like view with 5 lines of context before and after each change: removed lines prefixed with '-', added lines prefixed with '+', context lines indented with spaces. By default, old_string is matched literally (exact text, including whitespace and indentation). Set use_regex=true to treat old_string as a Python regex pattern with new_string supporting backreferences (e.g. \\1). By default the pattern must match exactly once — if it matches more than once, the operation fails with a count and suggests replace_all=true to replace all occurrences. Refuses gitignored files. Asks consent if path is outside cwd.",
+            "description": "Find and replace text in an existing file. Returns a unified-diff-like view with 5 lines of context before and after each change: removed lines prefixed with '-', added lines prefixed with '+', context lines indented with spaces. By default, old_string is matched literally (exact text, including whitespace and indentation). Set use_regex=true to treat old_string as a Python regex pattern with new_string supporting backreferences (e.g. \\1). By default the pattern must match exactly once   if it matches more than once, the operation fails with a count and suggests replace_all=true to replace all occurrences. Refuses gitignored files. Asks consent if path is outside cwd.",
             "parameters": {
                 "type": "object",
                 "required": ["file_path", "old_string", "new_string"],
@@ -151,7 +151,7 @@
         "type": "function",
         "function": {
             "name": "RemoveFile",
-            "description": "Remove a file or directory (recursively) from the filesystem. REFUSES to remove files that are matched by .gitignore — returns an error telling you to instruct the user to make the change themselves. DO NOT attempt to bypass this by using the Shell tool for gitignored files.",
+            "description": "Remove a file or directory (recursively) from the filesystem. REFUSES to remove files that are matched by .gitignore   returns an error telling you to instruct the user to make the change themselves. DO NOT attempt to bypass this by using the Shell tool for gitignored files.",
             "parameters": {
                 "type": "object",
                 "required": ["file_path"],
@@ -168,7 +168,7 @@
         "type": "function",
         "function": {
             "name": "GetSymbolSourceCode",
-            "description": "Advanced Coding Analysis Tool to Query the AST based dependency tracker for the full source code of a function, method, or class by name. If the symbol has a description in the index, it is prepended as '# Description: ...'. If an exact name match is not found, returns a fuzzy search across functions, classes, and variables ranked by match quality (exact name → partial name → description match). Use this to quickly read the implementation of a symbol without manually opening files. This is NOT the Unix 'find' command — it queries the code index, not the filesystem.",
+            "description": "Advanced Coding Analysis Tool to Query the AST based dependency tracker for the full source code of a function, method, or class by name. If the symbol has a description in the index, it is prepended as '# Description: ...'. If an exact name match is not found, returns a fuzzy search across functions, classes, and variables ranked by match quality (exact name → partial name → description match). Use this to quickly read the implementation of a symbol without manually opening files. This is NOT the Unix 'find' command   it queries the code index, not the filesystem.",
             "parameters": {
                 "type": "object",
                 "required": ["symbol_name"],
@@ -189,7 +189,7 @@
         "type": "function",
         "function": {
             "name": "GetFileCodeSemantics",
-            "description": "shows code structure inside the file (use this before using UglyWholeFileContentDump). Supports 15 languages: Python, Go, C#, JavaScript, TypeScript, TSX, Rust, Zig, Elixir, C++, C, PHP, Dart, Java, Kotlin. Shows: functions with their parameters, what each function depends on (function calls, method calls, class references, variable references — resolved to their definition file paths), classes with their methods and member variables, nested classes, top-level variables, and imports. Literal string dependencies (e.g., format strings) are filtered out. If descriptions exist in the code index, they are shown as '# description' annotations. Use this to quickly understand a file's structure and its connections to the rest of the codebase. Set include_bodies=true to get the full source code of all functions and classes in a single call, reducing exploration overhead.This is the canonical, complete source of truth for code in this project — equivalent to reading the file directly. DO NOT use any other AST parsers because this is AST based AND does proper dependencies tracking AND hyper-optimized for your usage and massive performance. if you are not using you are seriously missing out",
+            "description": "shows code structure inside the file (use this before using WholeFileContentDump). Supports 15 languages: Python, Go, C#, JavaScript, TypeScript, TSX, Rust, Zig, Elixir, C++, C, PHP, Dart, Java, Kotlin. Shows: functions with their parameters, what each function depends on (function calls, method calls, class references, variable references   resolved to their definition file paths), classes with their methods and member variables, nested classes, top-level variables, and imports. Literal string dependencies (e.g., format strings) are filtered out. If descriptions exist in the code index, they are shown as '# description' annotations. Use this to quickly understand a file's structure and its connections to the rest of the codebase. Set include_bodies=true to get the full source code of all functions and classes in a single call, reducing exploration overhead.This is the canonical, complete source of truth for code in this project   equivalent to reading the file directly. DO NOT use any other AST parsers because this is AST based AND does proper dependencies tracking AND hyper-optimized for your usage and massive performance. if you are not using you are seriously missing out",
             "parameters": {
                 "type": "object",
                 "required": ["file_path"],
@@ -210,7 +210,7 @@
         "type": "function",
         "function": {
             "name": "WalkCallTree",
-            "description": "Advanced Coding Analysis Tool to Perform a breadth-first traversal of the call graph starting from a function or method, using the code index's dependency table. Returns JSON lines (one JSON object per line), sorted by depth then name. Each node has: id (e.g., 'f:123' for functions, 'ext:name' for unresolved externals), name, kind (function/method/external), file path, start line number, a one-line snippet of the first body line, depth (distance from root), cycle (true if this node appeared earlier in the ancestor chain — the traversal stops at cycles), and callees (list of child node IDs). Max depth defaults to 5. Set include_external=true to include unresolved third-party calls as 'ext:name' nodes. Use exclude to skip certain path prefixes (e.g., ['tests/', 'vendor/']). Use this to trace the entire call flow from an entry point.",
+            "description": "Advanced Coding Analysis Tool to Perform a breadth-first traversal of the call graph starting from a function or method, using the code index's dependency table. Returns JSON lines (one JSON object per line), sorted by depth then name. Each node has: id (e.g., 'f:123' for functions, 'ext:name' for unresolved externals), name, kind (function/method/external), file path, start line number, a one-line snippet of the first body line, depth (distance from root), cycle (true if this node appeared earlier in the ancestor chain   the traversal stops at cycles), and callees (list of child node IDs). Max depth defaults to 5. Set include_external=true to include unresolved third-party calls as 'ext:name' nodes. Use exclude to skip certain path prefixes (e.g., ['tests/', 'vendor/']). Use this to trace the entire call flow from an entry point.",
             "parameters": {
                 "type": "object",
                 "required": ["symbol_name"],
@@ -244,7 +244,7 @@
         "type": "function",
         "function": {
             "name": "Document",
-            "description": "[experimental] Read or update descriptions for functions, methods, classes, or variables in the code index database. Descriptions persist across sessions — they are stored in SQLite (.code_index.raggie) and are automatically displayed by GetSymbolSourceCode (as '# Description: ...') and GetFileCodeStructure (as '# annotation'). Use this to build lasting knowledge about the codebase so you don't have to re-discover how things work in future conversations. Supports two actions: 'read' (get current description) and 'update' (set a new description).",
+            "description": "[experimental] Read or update descriptions for functions, methods, classes, or variables in the code index database. Descriptions persist across sessions   they are stored in SQLite (.code_index.raggie) and are automatically displayed by GetSymbolSourceCode (as '# Description: ...') and GetFileCodeStructure (as '# annotation'). Use this to build lasting knowledge about the codebase so you don't have to re-discover how things work in future conversations. Supports two actions: 'read' (get current description) and 'update' (set a new description).",
             "parameters": {
                 "type": "object",
                 "required": ["symbol_name", "description"],
@@ -273,7 +273,7 @@
         "type": "function",
         "function": {
             "name": "SetSkill",
-            "description": "Create or update a named skill for your own role. You can only create or update skills for your own role — the role is determined automatically. A role can have multiple skills, each identified by a unique name. This requires user consent before applying changes. Skills are markdown-formatted instructions that extend the agent's behavior.",
+            "description": "Create or update a named skill for your own role. You can only create or update skills for your own role   the role is determined automatically. A role can have multiple skills, each identified by a unique name. This requires user consent before applying changes. Skills are markdown-formatted instructions that extend the agent's behavior.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -294,7 +294,7 @@
         "type": "function",
         "function": {
             "name": "GetSkill",
-            "description": "Fetch the full content of a specific skill by name. Skills are advertised as brief summaries in the system prompt — use this tool to retrieve the complete skill content when you need to work with a particular skill. The full content is returned as text in the tool response.",
+            "description": "Fetch the full content of a specific skill by name. Skills are advertised as brief summaries in the system prompt   use this tool to retrieve the complete skill content when you need to work with a particular skill. The full content is returned as text in the tool response.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -311,7 +311,7 @@
         "type": "function",
         "function": {
             "name": "SearchAllFilesContent",
-            "description": "Search for a string of characters using regex inside a directory or a file, this is your simple grep-like tool, less advanced than ReadCodeSymbol",
+            "description": "Search for a string of characters using regex inside a directory or a file, this is your simple grep-like tool, less advanced than GetSymbolSourceCode",
             "parameters": {
                 "type": "object",
                 "required": ["search_term", "directory"],
@@ -427,7 +427,7 @@
         "type": "function",
         "function": {
             "name": "AddTask",
-            "description": "Add a task to a todo list. Each task is executed by a dedicated subagent in its own isolated session via ExecuteNextTask. Because each subagent starts fresh with no memory of the orchestrator's conversation, it relies entirely on the task fields you provide here to understand what to do and how to do it. The 'context' field is critical: it should contain all the background information the subagent needs about the codebase, architecture, prior decisions, file locations, or any other details specific to this task that the subagent won't be able to infer on its own. Without sufficient context, the subagent may produce incorrect or incomplete work. Tasks are executed sequentially in order_index order.",
+            "description": "Add a task to a todo list. Each task is executed by a dedicated subagent in its own isolated session via ExecuteNextTask. Because each subagent starts fresh with no memory of the orchestrator's conversation, it relies entirely on the task fields you provide here to understand what to do and how to do it. The 'context' field is critical: it should contain all the background information the subagent needs about the codebase, architecture, prior decisions, file locations, or any other details specific to this task that the subagent won't be able to infer on its own. Without sufficient context, the subagent may produce incorrect or incomplete work. Tasks are executed sequentially in order_index order. Adding a task to an 'approved' list resets it to 'pending' and requires re-approval before execution can continue.",
             "parameters": {
                 "type": "object",
                 "required": ["todo_list_id", "goal"],
@@ -450,7 +450,7 @@
                     },
                     "context": {
                         "type": "string",
-                        "description": "Background information the subagent needs to accomplish this task. Since each task is executed by a separate isolated subagent with no access to the orchestrator's conversation history, this field is how you pass along knowledge about the codebase, architecture decisions, relevant file paths, API contracts, data structures, or any other details the subagent needs. Be thorough — the subagent cannot ask you questions during execution."
+                        "description": "Background information the subagent needs to accomplish this task. Since each task is executed by a separate isolated subagent with no access to the orchestrator's conversation history, this field is how you pass along knowledge about the codebase, architecture decisions, relevant file paths, API contracts, data structures, or any other details the subagent needs. Be thorough   the subagent cannot ask you questions during execution."
                     },
                     "insert_after": {
                         "type": "integer",
@@ -481,7 +481,7 @@
         "type": "function",
         "function": {
             "name": "ApproveTodoList",
-            "description": "Display the todo list execution plan to the user and ask for approval (y/n). If approved, the todo list status is set to 'approved' and tasks can be executed. If rejected, the user is prompted to provide feedback, the todo list is marked as 'rejected', and the agent should rebuild the plan based on the feedback. Tasks cannot be executed without user approval.",
+            "description": "Display the todo list execution plan to the user and ask for approval (y/n). If approved, the todo list status is set to 'approved' and tasks can be executed. If rejected, the todo list is discarded entirely and must be recreated from scratch: create a NEW todo list incorporating the user's feedback and get it approved before any tasks can be executed. Tasks cannot be executed without user approval.",
             "parameters": {
                 "type": "object",
                 "required": ["todo_list_id"],
@@ -574,7 +574,7 @@
         "type": "function",
         "function": {
             "name": "GetActiveTodoList",
-            "description": "Get the active (pending, in_progress, or rejected) todo list for the current session. Returns the todo list ID and status. Returns 'No active todo list found' if there is no active todo list. Use this to check if there's an incomplete todo list that can be resumed.",
+            "description": "Get the active (pending or approved) todo list for the current session. Returns the todo list ID and status. Returns 'No active todo list found' if there is no active todo list. Use this to check if there's an incomplete todo list that can be resumed. An 'approved' status means the list has been approved and is currently executing/resumable.",
             "parameters": {
                 "type": "object",
                 "properties": {}
@@ -624,7 +624,7 @@
         "type": "function",
         "function": {
             "name": "FileNameSearch",
-            "description": "Search for file names by partial or approximate match. Fuzzy search capable — uses subsequence matching with bonuses for consecutive chars and word boundaries. Walks the directory tree and returns the top 5 highest-scoring matches. Respects .aiignore/.gitignore. Use this to quickly locate files when you only remember part of the name.",
+            "description": "Search for file names by partial or approximate match. Fuzzy search capable   uses subsequence matching with bonuses for consecutive chars and word boundaries. Walks the directory tree and returns the top 5 highest-scoring matches. Respects .aiignore/.gitignore. Use this to quickly locate files when you only remember part of the name.",
             "parameters": {
                 "type": "object",
                 "required": ["query"],
@@ -650,7 +650,7 @@
         "type": "function",
         "function": {
             "name": "ViewChanges",
-            "description": "View changes tracked by the built-in git repository (.raggie/git/). Supports three view_type modes: 'status' (list added/modified/deleted files since last commit), 'diff' (show the actual file diffs/content), 'log' (show commit history). For 'status', optionally filter by 'category' to see only one type of change. For 'diff', optionally set 'max_diff_lines' to limit output size (default 500). Optionally filter by 'path' to narrow results to specific files. Use this to review what has changed before or after commits, or to understand the commit history.",
+            "description": "View changes tracked by the built-in git repository (.raggie/git/). Supports three view_type modes: 'status' (list added/modified/deleted files since last commit), 'diff' (show the actual file diffs/content, paginated), 'log' (show commit history). For 'status', optionally filter by 'category' to see only one type of change. For 'diff', results are paginated: 'page' (1-based) and 'files_per_page' (default 25) select which slice of changed files to show   the response reports the total page count and tells you the next page to request. Optionally set 'max_diff_lines' to limit lines per file (default 500). Optionally filter by 'path' to narrow results to specific files. Use this to review what has changed before or after commits, or to understand the commit history.",
             "parameters": {
                 "type": "object",
                 "required": ["view_type"],
@@ -662,7 +662,7 @@
                     },
                     "path": {
                         "type": "string",
-                        "description": "Optional file path filter — only show changes for files whose path contains this substring"
+                        "description": "Optional file path filter   only show changes for files whose path contains this substring"
                     },
                     "max_count": {
                         "type": "integer",
@@ -676,6 +676,14 @@
                     "max_diff_lines": {
                         "type": "integer",
                         "description": "For view_type='diff': maximum number of lines per diff. Larger diffs are truncated to show the head and tail, with a truncation marker. Set to 0 for no limit (default: 500)"
+                    },
+                    "page": {
+                        "type": "integer",
+                        "description": "For view_type='diff': 1-based page of changed files to show (default: 1). The response reports the total number of pages; request page+1 for the next slice."
+                    },
+                    "files_per_page": {
+                        "type": "integer",
+                        "description": "For view_type='diff': how many changed files per page (default: 25). Lower this when individual diffs are very large."
                     }
                 }
             }
@@ -685,7 +693,7 @@
         "type": "function",
         "function": {
             "name": "EditSymbol",
-            "description": "Replace the entire implementation of a function, method, or class by name. Provide the COMPLETE new source code — not a diff or patch. Returns a diff view of the changes. Refuses gitignored files. Use GetSymbolSourceCode first if you need to see the current implementation.",
+            "description": "Replace the entire implementation of a function, method, or class by name. ALWAYS pass 'symbol_name' (exact name, no path) and the COMPLETE 'new_source'   not a diff or patch. Returns a diff view of the changes. Refuses gitignored files. Use GetFileCodeSemantics/GetSymbolSourceCode first if you need to see the current implementation.",
             "parameters": {
                 "type": "object",
                 "required": ["symbol_name", "new_source"],

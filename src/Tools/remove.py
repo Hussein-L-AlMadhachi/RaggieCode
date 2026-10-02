@@ -2,7 +2,7 @@ import os
 import shutil
 from pathlib import Path
 
-from .utils import is_ignored_by_gitignore, is_within_cwd, BLUE, RESET, auto_record_change, reindex_after_change
+from .utils import is_ignored_by_gitignore, is_within_cwd, prompt_path_permission, denial_content, BLUE, RESET, auto_record_change, reindex_after_change
 
 
 def handle(arguments, toolcall_id, session_id=None, code_indexer=None):
@@ -12,11 +12,14 @@ def handle(arguments, toolcall_id, session_id=None, code_indexer=None):
     try:
         # Check if the file is outside the current working directory
         if not is_within_cwd(file_path):
-            return {
-                "role": "tool",
-                "tool_call_id": toolcall_id,
-                "content": "Error: access denied - path is outside the current working directory",
-            }
+            if not prompt_path_permission(
+                file_path, "remove", "path is outside the current working directory"
+            ):
+                return {
+                    "role": "tool",
+                    "tool_call_id": toolcall_id,
+                    "content": denial_content("Error: access denied - path is outside the current working directory"),
+                }
 
         target = Path(file_path).resolve()
 
@@ -30,11 +33,14 @@ def handle(arguments, toolcall_id, session_id=None, code_indexer=None):
 
         # Refuse to remove anything that is gitignored
         if is_ignored_by_gitignore(str(target)):
-            return {
-                "role": "tool",
-                "tool_call_id": toolcall_id,
-                "content": "cannot remove sensitive information. DO NOT TRY TO REMOVE this using shell toolcalls either, instead instruct the user to make the changes themselves.",
-            }
+            if not prompt_path_permission(
+                str(target), "remove", "file is gitignored"
+            ):
+                return {
+                    "role": "tool",
+                    "tool_call_id": toolcall_id,
+                    "content": denial_content("cannot remove sensitive information. DO NOT TRY TO REMOVE this using shell toolcalls either, instead instruct the user to make the changes themselves."),
+                }
 
         if target.is_dir():
             shutil.rmtree(target)
