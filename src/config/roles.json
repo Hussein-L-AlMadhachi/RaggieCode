@@ -32,6 +32,7 @@
             "FileNameSearch",
             "EditSymbol"
         ],
+        "indexing": true,
         "model": "",
         "base_url": "",
         "provider": "",

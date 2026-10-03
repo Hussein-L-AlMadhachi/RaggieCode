@@ -40,6 +40,23 @@ def _tool_summary(name, args):
     parts = [f"{k}: {str(v)[:60]}" for k, v in args.items()]
     return f"{name}   {' '.join(parts)}"
 
+
+def _tool_requires_index(entry):
+    """True when a tools.json entry declares it needs the code index."""
+    return bool(entry.get("indexing", False))
+
+
+def _api_tool_schema(entry):
+    """Return the tool schema sent to the completion API.
+
+    Strips the local-only "indexing" flag without mutating the original
+    tools.json entry.
+    """
+    if "indexing" not in entry:
+        return entry
+    return {k: v for k, v in entry.items() if k != "indexing"}
+
+
 def calculate_function_complexity( branch_score, n_lines ):
     return round(branch_score / 30, 2) + (n_lines/100)
 
@@ -232,26 +249,35 @@ class Agent:
         if self.is_new_session or not any(msg.get("role") == "system" for msg in self.chat_history):
             self.chat_history.insert(0, {"role": "system", "content": self.system_prompt})
 
+        # Whether this role uses the code index at all. When False, index-driven
+        # tools are hidden and no code index is built or refreshed.
+        self.indexing_enabled = bool(self.roles[role].get("indexing", True))
+
         # Initialize code indexer for tracking changes
         from raggie_dirs import get_code_index_db_path
-        self.code_indexer = CodeIndexSDK(
-            db_path=str(get_code_index_db_path()),
-            root_dir=os.getcwd()
-        )
+        if self.indexing_enabled:
+            self.code_indexer = CodeIndexSDK(
+                db_path=str(get_code_index_db_path()),
+                root_dir=os.getcwd()
+            )
 
-        # Share code indexer with tool registry for selective re-indexing
-        self.tool_registry.code_indexer = self.code_indexer
+            # Share code indexer with tool registry for selective re-indexing
+            self.tool_registry.code_indexer = self.code_indexer
+        else:
+            self.code_indexer = None
+            self.tool_registry.code_indexer = None
 
         # Initialize git manager for commit/undo/redo operations
         self.git_manager = GitManager(root_dir=os.getcwd())
 
         # Index the codebase at the start of each conversation
-        try:
-            with self.console.status("[bold green]Indexing codebase...", spinner="dots"):
-                self.code_indexer.index_directory()
-        except (KeyboardInterrupt, EOFError):
-            self.console.print("\n[yellow]Indexing interrupted. Using existing index.[/yellow]")
-            self.code_indexer._connect()
+        if self.indexing_enabled:
+            try:
+                with self.console.status("[bold green]Indexing codebase...", spinner="dots"):
+                    self.code_indexer.index_directory()
+            except (KeyboardInterrupt, EOFError):
+                self.console.print("\n[yellow]Indexing interrupted. Using existing index.[/yellow]")
+                self.code_indexer._connect()
 
         # Display previous chat history if it exists (skip for subagents   they
         # share the chat_id but don't need the parent's conversation printed)
@@ -462,13 +488,18 @@ class Agent:
 
     def _get_tools(self, role):
         tools_required = self.roles[role]["tools"]
+        role_uses_index = bool(self.roles[role].get("indexing", True))
         formatted_tools = []
 
         for tool in tools_required:
             if tool not in self.tools:
                 print(f"Warning: tool '{tool}' required by role '{role}' is not defined in tools.json, skipping")
                 continue
-            formatted_tools.append(self.tools[tool])
+            entry = self.tools[tool]
+            # Hide index-driven tools entirely when the role opts out of indexing.
+            if not role_uses_index and _tool_requires_index(entry):
+                continue
+            formatted_tools.append(_api_tool_schema(entry))
         formatted_tools.extend(mcp_client.get_api_schemas())
         return formatted_tools
 
@@ -1046,9 +1077,10 @@ class Agent:
             # tools and health stats reflect the latest file state.
             # Emitted as tuple events so headless/ACP consumers can show
             # indexing progress; the terminal printer ignores unknown kinds.
-            yield ("status", "Indexing codebase...")
-            self._reindex_before_message()
-            yield ("status_done",)
+            if self.code_indexer is not None:
+                yield ("status", "Indexing codebase...")
+                self._reindex_before_message()
+                yield ("status_done",)
 
             # Check for registered commands. Command handlers talk through
             # print()/console.print(); capture that output and emit it as a
@@ -1192,6 +1224,8 @@ class Agent:
         Incremental (mtime/hash based), so it is cheap when nothing changed.
         Never blocks the turn on failure.
         """
+        if self.code_indexer is None:
+            return
         try:
             with self.console.status("[bold green]Indexing codebase...", spinner="dots"):
                 self.code_indexer.index_directory()

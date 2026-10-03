@@ -16,6 +16,7 @@ The schema version for a user's config dir is stored in
 """
 
 import json
+import shutil
 from pathlib import Path
 
 # Config files that existed at schema version 1 (the original raggie config set).
@@ -342,6 +343,50 @@ def migrate_v11(configs):
     return configs
 
 
+def migrate_v12(configs):
+    """v11 -> v12: per-tool indexing flags + per-role indexing switch.
+
+    tools.json entries get an "indexing" boolean copied from the default
+    tools.json (True only for the index-driven tools, False otherwise; any
+    tool unknown to the defaults gets False). roles.json roles that predate
+    the switch get "indexing": True, while an explicit False is preserved.
+    The bundled coder_system_prompt.md is refreshed on disk so the updated
+    prompt ships to existing users.
+    """
+    # --- tools.json: per-tool indexing flags ---
+    tools = configs.get("tools.json")
+    if tools and isinstance(tools, dict):
+        defaults = _load_default("tools.json")
+        for name, entry in tools.items():
+            if not isinstance(entry, dict):
+                continue
+            default_entry = defaults.get(name) if isinstance(defaults, dict) else None
+            if isinstance(default_entry, dict):
+                entry["indexing"] = bool(default_entry.get("indexing", False))
+            else:
+                entry["indexing"] = False
+
+    # --- roles.json: per-role indexing switch ---
+    roles = configs.get("roles.json")
+    if roles and isinstance(roles, dict):
+        for role in roles.values():
+            if not isinstance(role, dict):
+                continue
+            if "indexing" not in role:
+                role["indexing"] = True
+
+    # --- refresh the bundled system prompt (on disk, not in configs) ---
+    from Agent.config import USER_CONFIG_DIR
+
+    default_prompt = _DEFAULT_CONFIG_DIR / "coder_system_prompt.md"
+    if default_prompt.exists() and USER_CONFIG_DIR.exists():
+        try:
+            shutil.copy2(default_prompt, USER_CONFIG_DIR / "coder_system_prompt.md")
+        except OSError:
+            pass
+    return configs
+
+
 MIGRATIONS = {
     2: migrate_v2,
     3: migrate_v3,
@@ -353,6 +398,7 @@ MIGRATIONS = {
     9: migrate_v9,
     10: migrate_v10,
     11: migrate_v11,
+    12: migrate_v12,
 }
 
 # Latest schema version. Derived from the registry so it stays in sync.
