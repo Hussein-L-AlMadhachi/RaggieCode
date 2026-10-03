@@ -27,12 +27,9 @@ For a full tour of the source tree, the agent loop and the event stream, read [A
 ```bash
 git clone https://github.com/Hussein-L-AlMadhachi/RaggieCode.git
 cd RaggieCode
+pip install .
 
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
-
-raggie setup    # add an API key, pick a provider and model
+python3 src/raggie.py setup    # add an API key, pick a provider and model
 ```
 
 Web UI:
@@ -44,6 +41,19 @@ pnpm build      # the backend serves web-ui/dist
 ```
 
 See [web-ui/README.md](web-ui/README.md) for running Vite's dev server with hot reload against a running backend.
+
+## testing your changes
+
+with terminal ui
+```
+python3 src/raggie.py code
+```
+
+with web ui
+```
+python3 build_all.py
+python3 src/raggie.py code --web
+```
 
 ### Use `--dev` while developing
 
