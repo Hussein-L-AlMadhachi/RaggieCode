@@ -11,7 +11,9 @@ Build the frontend once, then start the backend:
 cd web-ui
 pnpm install && pnpm build
 cd ..
-raggie code --web           # serves http://127.0.0.1:8765/?sid=<id>
+
+python3 build_all.py
+python3 src/raggie.py code --web           # serves http://127.0.0.1:8765/?sid=<id>
 # raggie code --web --dev   # isolated: uses .raggie-dev instead of .raggie
 # raggie code --web --acp-port 9000
 ```
