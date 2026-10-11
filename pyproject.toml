@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "raggiecode"
-version = "1.0.1"
+version = "1.0.2"
 description = "AI Coding Agent"
 readme = "README.md"
 license = { text = "Apache-2.0" }

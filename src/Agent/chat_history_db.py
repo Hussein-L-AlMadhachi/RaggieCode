@@ -608,28 +608,43 @@ def repair_message_sequence(messages: List[Dict]) -> List[Dict]:
     tool_calls is followed by user/other messages, with the tool responses
     appended later. The chat API requires every tool response to directly
     follow its assistant tool_calls message, so pull each one forward.
+
+    A tool_call_id answered more than once (e.g. an interactive tool that got
+    re-executed after a cancel/resume) would leave its second response
+    dangling behind, which the API rejects with "Messages with role 'tool'
+    must be a response to a preceding message with 'tool_calls'". Such
+    duplicates are dropped: only the first response is kept.
     """
     result = []
     owner = {}   # tool_call_id -> position of owning assistant message in result
     placed = {}  # assistant position -> number of its tool responses already placed
+    answered = set()  # tool_call_ids that already have a response placed
     for msg in messages:
         tool_call_id = msg.get("tool_call_id")
-        if tool_call_id is not None and tool_call_id in owner:
-            asst_pos = owner.pop(tool_call_id)
-            insert_at = asst_pos + 1 + placed.get(asst_pos, 0)
-            result.insert(insert_at, msg)
-            placed = {k + 1 if k >= insert_at else k: v for k, v in placed.items()}
-            placed[asst_pos] = placed.get(asst_pos, 0) + 1
-            owner = {k: v + 1 if v >= insert_at else v for k, v in owner.items()}
-        else:
-            if msg.get("role") == "assistant" and msg.get("tool_calls"):
-                asst_pos = len(result)
-                for tc in msg["tool_calls"]:
-                    tcid = tc.get("id")
-                    if tcid:
-                        owner[tcid] = asst_pos
-                placed[asst_pos] = 0
-            result.append(msg)
+        if tool_call_id is not None:
+            # A duplicate tool response can never be sent to the API, so drop
+            # it. (A tool_call_id with no owning assistant message yet is left
+            # in place untouched, preserving the original round-trip behavior.)
+            if tool_call_id in answered:
+                continue
+            if tool_call_id in owner:
+                answered.add(tool_call_id)
+                asst_pos = owner.pop(tool_call_id)
+                insert_at = asst_pos + 1 + placed.get(asst_pos, 0)
+                result.insert(insert_at, msg)
+                placed = {k + 1 if k >= insert_at else k: v for k, v in placed.items()}
+                placed[asst_pos] = placed.get(asst_pos, 0) + 1
+                owner = {k: v + 1 if v >= insert_at else v for k, v in owner.items()}
+                continue
+
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            asst_pos = len(result)
+            for tc in msg["tool_calls"]:
+                tcid = tc.get("id")
+                if tcid:
+                    owner[tcid] = asst_pos
+            placed[asst_pos] = 0
+        result.append(msg)
     return result
 
 

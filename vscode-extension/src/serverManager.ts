@@ -23,16 +23,56 @@ export interface Identity {
   raggie: boolean;
   cwd?: string;
   port?: number;
+  /** Installed raggiecode version reported by the server (e.g. "1.0.2"). */
+  version?: string;
   /** True when any HTTP process (raggie or not) answered on the port. */
   answered?: boolean;
 }
 
-function parseIdentity(body: string): Identity {
+/** The raggiecode version this extension expects the backend to run. */
+export const EXPECTED_BACKEND_VERSION = "1.0.2";
+
+/**
+ * True when an installed version is strictly older than the expected version.
+ * Missing versions and the "dev" marker (source checkout) are treated as
+ * current so development never triggers a self-upgrade loop.
+ */
+export function isBackendBehind(
+  installed: string | undefined,
+  expected: string = EXPECTED_BACKEND_VERSION
+): boolean {
+  if (!installed || installed === "dev") {
+    return false;
+  }
+  return compareVersions(installed, expected) < 0;
+}
+
+function compareVersions(a: string, b: string): number {
+  const segments = (v: string) =>
+    v.split(".").map((n) => {
+      const parsed = Number.parseInt(n, 10);
+      return Number.isNaN(parsed) ? 0 : parsed;
+    });
+  const pa = segments(a);
+  const pb = segments(b);
+  const length = Math.max(pa.length, pb.length);
+  for (let i = 0; i < length; i++) {
+    const da = pa[i] ?? 0;
+    const db = pb[i] ?? 0;
+    if (da !== db) {
+      return da - db;
+    }
+  }
+  return 0;
+}
+
+export function parseIdentity(body: string): Identity {
   try {
     const payload = JSON.parse(body) as {
       service?: unknown;
       cwd?: unknown;
       port?: unknown;
+      version?: unknown;
     };
     if (payload.service !== "raggie-acp") {
       return { raggie: false, answered: true };
@@ -41,6 +81,8 @@ function parseIdentity(body: string): Identity {
       raggie: true,
       cwd: typeof payload.cwd === "string" ? payload.cwd : undefined,
       port: typeof payload.port === "number" ? payload.port : undefined,
+      version:
+        typeof payload.version === "string" ? payload.version : undefined,
       answered: true,
     };
   } catch {
@@ -141,14 +183,22 @@ export class RaggieServerManager {
   private generation = 0;
   private logs: string[] = [];
   private errorSurfaced = false;
+  private backendUpdateAttempted = false;
+  private disposed = false;
 
   private readonly stateEmitter = new vscode.EventEmitter<ServerState>();
   private readonly errorEmitter = new vscode.EventEmitter<string>();
+  private readonly backendBehindEmitter = new vscode.EventEmitter<{
+    installed: string;
+    expected: string;
+  }>();
 
   /** Fires on every lifecycle transition: stopped/starting/running/error. */
   readonly onStateChange = this.stateEmitter.event;
   /** Fires at most once per incident with a message including recent logs. */
   readonly onError = this.errorEmitter.event;
+  /** Fires once per session when the running backend is older than expected. */
+  readonly onBackendBehind = this.backendBehindEmitter.event;
 
   constructor(
     private readonly output: vscode.OutputChannel,
@@ -170,10 +220,48 @@ export class RaggieServerManager {
     return this.isState("running") ? this.boundPort : undefined;
   }
 
+  /**
+   * Resolve with this window's server port once it is running, or reject if
+   * the server is stopped, errors, is disposed, or never becomes ready in
+   * time. Used by the bridge to hold requests while the backend boots instead
+   * of failing them with a "not running" error.
+   */
+  waitUntilReady(timeoutMs: number = READY_TIMEOUT_MS): Promise<number> {
+    const currentPort = this.port;
+    if (currentPort !== undefined) {
+      return Promise.resolve(currentPort);
+    }
+    return new Promise((resolve, reject) => {
+      const deadline = Date.now() + timeoutMs;
+      const timer = setInterval(() => {
+        const port = this.port;
+        if (port !== undefined) {
+          clearInterval(timer);
+          resolve(port);
+          return;
+        }
+        if (this.disposed || this.isState("error") || this.isState("stopped")) {
+          clearInterval(timer);
+          reject(new Error("Raggie server is not available."));
+          return;
+        }
+        if (Date.now() >= deadline) {
+          clearInterval(timer);
+          reject(new Error("The Raggie server did not become ready in time."));
+        }
+      }, POLL_INTERVAL_MS);
+    });
+  }
+
   async start(): Promise<void> {
     if (this.state === "starting" || this.state === "running") {
       return;
     }
+
+    // Mark starting immediately so the status bar, the UI loader, and any
+    // waiting bridge request see "starting" through the whole boot (identity
+    // probe + spawn + readiness) instead of a misleading "stopped" gap.
+    this.setState("starting");
 
     const config = vscode.workspace.getConfiguration("raggie");
     const configuredPort = config.get<number>("server.port", 8765);
@@ -199,6 +287,7 @@ export class RaggieServerManager {
     ) {
       this.external = true;
       this.boundPort = identity.port ?? configuredPort;
+      this.checkBackendVersion(identity);
       this.setState("running");
       return;
     }
@@ -338,6 +427,7 @@ export class RaggieServerManager {
           this.child = null;
         }
         this.boundPort = readyIdentity.port ?? readyPort;
+        this.checkBackendVersion(readyIdentity);
         this.setState("running");
         return;
       }
@@ -396,6 +486,7 @@ export class RaggieServerManager {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.generation++;
     const child = this.child;
     this.child = null;
@@ -406,6 +497,7 @@ export class RaggieServerManager {
     this.boundPort = undefined;
     this.stateEmitter.dispose();
     this.errorEmitter.dispose();
+    this.backendBehindEmitter.dispose();
   }
 
   private setState(state: ServerState): void {
@@ -427,6 +519,32 @@ export class RaggieServerManager {
   /** State check via method so TS does not narrow this.state in loops. */
   private isState(state: ServerState): boolean {
     return this.state === state;
+  }
+
+  /**
+   * Fire onBackendBehind when the running server reports a version older than
+   * the expected one. Attempts only once per manager lifetime and defers the
+   * fire to the next task so a handler that restarts the server does not
+   * re-enter start() mid-flight.
+   */
+  private checkBackendVersion(identity: Identity): void {
+    if (this.backendUpdateAttempted) {
+      return;
+    }
+    const installed = identity.version;
+    if (!isBackendBehind(installed)) {
+      return;
+    }
+    this.backendUpdateAttempted = true;
+    const payload = {
+      installed: installed ?? "unknown",
+      expected: EXPECTED_BACKEND_VERSION,
+    };
+    setTimeout(() => {
+      if (!this.disposed) {
+        this.backendBehindEmitter.fire(payload);
+      }
+    }, 0);
   }
 
   private appendLog(chunk: string): void {

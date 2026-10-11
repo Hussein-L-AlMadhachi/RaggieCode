@@ -54,6 +54,12 @@
               {/if}
             </div>
           {/each}
+          {#if chatStore.todo.status === 'pending'}
+            <div class="todo-actions">
+              <button class="todo-approve" onclick={() => chatStore.respondTodo('approve')}>approve plan</button>
+              <button class="todo-reject" onclick={() => chatStore.respondTodo('reject')}>reject</button>
+            </div>
+          {/if}
         {/if}
       </div>
     </div>
@@ -205,5 +211,38 @@
   .meta-label {
     color: var(--fg-subtle);
     margin-right: var(--sp-2);
+  }
+
+  .todo-actions {
+    display: flex;
+    gap: var(--sp-3);
+    padding-top: var(--sp-5);
+  }
+
+  .todo-actions button {
+    height: var(--control-sm);
+    padding: 0 var(--sp-5);
+    font-size: var(--fs-md);
+    border: var(--border-w) solid var(--border);
+    cursor: pointer;
+  }
+
+  .todo-approve {
+    background: var(--primary-bg);
+    color: var(--primary-fg);
+  }
+
+  .todo-approve:hover {
+    background: var(--primary-bg-hover);
+  }
+
+  .todo-reject {
+    background: var(--bg);
+    color: var(--danger-fg);
+    border-color: var(--danger-fg);
+  }
+
+  .todo-reject:hover {
+    background: var(--bg-hover-alt);
   }
 </style>

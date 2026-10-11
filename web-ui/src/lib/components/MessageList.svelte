@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import { chatStore } from '../store.svelte';
+  import { contextFromParts } from '../reply';
   import type { Message, SubagentMessage, ToolMessage } from '../types';
   import Markdown from './Markdown.svelte';
   import Loader from './Loader.svelte';
@@ -182,7 +183,89 @@
     }
     fetchLock = false;
   }
+
+  // -- reply selection ----------------------------------------------------
+  // A native text selection inside a replyable block (user/agent/tool)
+  // shows a "reply" button above the selection. The selected text plus its
+  // surrounding lines are captured on mouseup so the button click does not
+  // need to re-read the (by then cleared) selection.
+  let replySelection = $state<{
+    x: number;
+    y: number;
+    text: string;
+    contextAbove: string;
+    contextBelow: string;
+    target: Message;
+  } | null>(null);
+
+  function beforeSelection(el: HTMLElement, range: Range): string {
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    r.setEnd(range.startContainer, range.startOffset);
+    return r.toString();
+  }
+
+  function afterSelection(el: HTMLElement, range: Range): string {
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    r.setStart(range.endContainer, range.endOffset);
+    return r.toString();
+  }
+
+  function onSelectionMouseUp(e: MouseEvent, m: Message) {
+    const el = e.currentTarget as HTMLElement;
+    // Let the browser finish updating the selection before reading it.
+    window.setTimeout(() => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) {
+        replySelection = null;
+        return;
+      }
+      const selected = sel.toString();
+      if (!selected.trim()) {
+        replySelection = null;
+        return;
+      }
+      const range = sel.getRangeAt(0);
+      if (!el.contains(range.commonAncestorContainer)) {
+        replySelection = null;
+        return;
+      }
+      const context = contextFromParts(
+        beforeSelection(el, range),
+        afterSelection(el, range),
+      );
+      const rect = range.getBoundingClientRect();
+      replySelection = {
+        x: rect.left + rect.width / 2,
+        y: rect.top,
+        text: selected,
+        contextAbove: context.above,
+        contextBelow: context.below,
+        target: m,
+      };
+    }, 0);
+  }
+
+  function submitSelectionReply() {
+    const selection = replySelection;
+    if (!selection) return;
+    chatStore.addReply(selection.target, {
+      text: selection.text,
+      contextAbove: selection.contextAbove,
+      contextBelow: selection.contextBelow,
+    });
+    replySelection = null;
+  }
 </script>
+
+<svelte:window
+  onmousedown={(e) => {
+    if (!(e.target as HTMLElement).closest?.('.reply-selection')) {
+      replySelection = null;
+    }
+  }}
+/>
 
 {#if messages.length === 0}
   {#if chatStore.openLoading}
@@ -268,9 +351,23 @@
             class="handover-label handover-tip-host"
             data-tip="model context window was filling up so a handover was initiated"
           >agent task handover initiated</span>
-          <div class="doc-view" data-mid={m.mid}><Markdown text={m.text} /></div>
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <div
+            class="doc-view"
+            data-mid={m.mid}
+            role="article"
+            onmouseup={(e) => onSelectionMouseUp(e, m)}
+          >
+            <Markdown text={m.text} />
+          </div>
         {:else}
-          <pre class="user" data-mid={m.mid} dir="auto">{m.text}</pre>
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+          <pre
+            class="user"
+            data-mid={m.mid}
+            dir="auto"
+            onmouseup={(e) => onSelectionMouseUp(e, m)}
+          >{m.text}</pre>
         {/if}
       {:else if m.kind === 'notice'}
         <div class="notice">{m.text}</div>
@@ -280,7 +377,12 @@
         <!-- Closed by default: only the summary row (status + title) shows;
              click a tool call when you need to investigate its details. -->
         {@const ts = toolSummary(m.title, m.input)}
-        <details class="tool" class:failed={m.status === 'failed'}>
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <details
+          class="tool"
+          class:failed={m.status === 'failed'}
+          onmouseup={(e) => onSelectionMouseUp(e, m)}
+        >
           <summary>
             <span class="tool-status">
               {m.status === 'completed' ? '[ok]' : m.status === 'failed' ? '[x]' : '[..]'}
@@ -312,7 +414,15 @@
       {:else if m.kind === 'subagent'}
         {@render subagentBlock(m)}
       {:else}
-        <div class="agent" data-mid={m.mid}><Markdown text={m.text} /></div>
+        <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+        <div
+          class="agent"
+          data-mid={m.mid}
+          role="article"
+          onmouseup={(e) => onSelectionMouseUp(e, m)}
+        >
+          <Markdown text={m.text} />
+        </div>
       {/if}
     {/each}
     {#if chatStore.dangling || chatStore.interrupted}
@@ -326,6 +436,15 @@
       </button>
     {/if}
   </div>
+{/if}
+
+{#if replySelection}
+  <button
+    class="reply-selection"
+    style:left={`${replySelection.x}px`}
+    style:top={`${replySelection.y}px`}
+    onclick={submitSelectionReply}
+  >reply</button>
 {/if}
 
 <style>
@@ -764,5 +883,29 @@
   /* Same .doc-view panel, one shade off so it reads as subagent output. */
   .subagent-doc {
     background: var(--bg);
+  }
+
+  /* Floating "reply" button shown above a native text selection. Fixed to
+     the viewport so it tracks the selection rect regardless of scroll. */
+  .reply-selection {
+    position: fixed;
+    transform: translate(-50%, calc(-100% - 8px));
+    z-index: 60;
+    font-family: var(--mono);
+    font-size: var(--fs-2xs);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: var(--sp-1) var(--sp-4);
+    background: var(--primary-bg);
+    color: var(--primary-fg);
+    border: var(--border-w) solid var(--primary-bg);
+    box-shadow: 2px 2px 0 var(--border-soft);
+    white-space: nowrap;
+    pointer-events: auto;
+    cursor: pointer;
+  }
+
+  .reply-selection:hover {
+    background: var(--primary-bg-hover);
   }
 </style>

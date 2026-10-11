@@ -117,6 +117,27 @@ export type Message =
   | ToolMessage
   | SubagentMessage;
 
+/**
+ * A "reply" the user attaches to a specific message (user message, agent
+ * response, or tool call). The marker lives in the composer and is embedded
+ * into the outgoing prompt as a quotation block with surrounding context.
+ */
+export interface Reply {
+  id: string;
+  /** Client id of the message/tool call being replied to. */
+  targetId: string;
+  /** Short label shown on the composer chip (e.g. "you", "agent", "tool · WriteFile"). */
+  label: string;
+  /** The exact text the user selected to reply to. */
+  quoteText: string;
+  /** Up to 3 lines of text before the selection, within the same message/tool block. */
+  contextAbove: string;
+  /** Up to 3 lines of text after the selection, within the same message/tool block. */
+  contextBelow: string;
+  /** The user's reply/opinion, edited in the reply modal. */
+  content: string;
+}
+
 export interface PermissionOption {
   optionId: string;
   name: string;

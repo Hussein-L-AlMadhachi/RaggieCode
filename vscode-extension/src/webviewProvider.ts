@@ -21,6 +21,7 @@ interface RewriteCtx {
 export class RaggieChatViewProvider implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | undefined;
   private autoStartKicked = false;
+  private stateForwarded = false;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -38,11 +39,27 @@ export class RaggieChatViewProvider implements vscode.WebviewViewProvider {
     view.webview.onDidReceiveMessage(
       createBridgeHost({
         getPort: () => this.serverManager.port,
+        waitForPort: () => this.serverManager.waitUntilReady(),
+        getState: () => this.serverManager.current,
         postToUi: (message) => this.postToUi(message),
       })
     );
 
+    this.forwardServerState();
+
     void this.loadUi(view);
+  }
+
+  /** Push the current backend state to the UI now, and again on every
+   * transition, so the loader reflects startup/restart/stop in real time. */
+  private forwardServerState(): void {
+    this.postToUi({ type: "raggie-server-state", state: this.serverManager.current });
+    if (!this.stateForwarded) {
+      this.stateForwarded = true;
+      this.serverManager.onStateChange(() =>
+        this.postToUi({ type: "raggie-server-state", state: this.serverManager.current })
+      );
+    }
   }
 
   /** Post a host message into the web UI (e.g. 'raggie-prompt').

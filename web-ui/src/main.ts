@@ -1,7 +1,7 @@
 import { mount } from 'svelte'
 import './app.css'
 import App from './App.svelte'
-import { isVsCodeHost, onHostMessage } from './lib/bridge'
+import { isVsCodeHost, onHostMessage, requestServerState } from './lib/bridge'
 import { chatStore } from './lib/store.svelte'
 
 // Hosted layout mode: CSS keyed off html.vscode-host sizes the app to fill
@@ -22,8 +22,14 @@ onHostMessage((msg) => {
     void chatStore.send();
   } else if (msg.type === 'raggie-open-setup') {
     void chatStore.openSetup();
+  } else if (msg.type === 'raggie-server-state') {
+    chatStore.setServerState(msg.state);
   }
 })
+
+// Ask the host for the current backend state so the startup loader reflects
+// reality even when the view loads after the server already finished booting.
+requestServerState();
 
 const app = mount(App, {
   target: document.getElementById('app')!,
