@@ -139,3 +139,27 @@ export async function ensureVenv(
 
   return entrypoint;
 }
+
+/**
+ * Upgrade raggiecode inside the dedicated venv (or create it fresh when it
+ * does not exist yet). Used by the version-behind self-update flow.
+ */
+export async function upgradeVenvRaggieCode(
+  output: vscode.OutputChannel
+): Promise<void> {
+  const entrypoint = venvRaggiePath();
+  if (!fs.existsSync(entrypoint)) {
+    await ensureVenv(output);
+    return;
+  }
+  const pip = await spawnLogged(
+    path.join(venvDir(), "bin", "python"),
+    ["-m", "pip", "install", "--upgrade", "raggiecode"],
+    output
+  );
+  if (pip.code !== 0) {
+    throw new Error(
+      `Upgrading Raggie Code in its environment failed (pip exited with code ${pip.code}). See the Raggie Server output for details.`
+    );
+  }
+}

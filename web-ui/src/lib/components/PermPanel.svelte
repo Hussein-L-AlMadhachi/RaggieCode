@@ -22,7 +22,7 @@
     {#each options as option (option.optionId)}
       <BusyButton
         class={option.optionId === 'reject' ? 'no' : option.optionId === 'allow_always' || option.optionId === 'always' ? 'always' : 'yes'}
-        onclick={() => chatStore.respondPermission(option.optionId as 'allow' | 'allow_always' | 'reject')}
+        onclick={() => chatStore.respondPermission(option.optionId)}
       >
         {option.name.toLowerCase()}
       </BusyButton>

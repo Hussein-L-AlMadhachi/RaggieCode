@@ -21,6 +21,7 @@ import queue
 import threading
 import time
 import uuid
+from importlib.metadata import version as _pkg_version
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -46,6 +47,7 @@ _REQUESTS = {
     "health/report": (None, "health_report"),
     "commands/list": (None, "commands_list"),
     "todo/active": (None, "active_todo"),
+    "todo/respond": (None, "respond_todo"),
     "setup/status": (None, "setup_status"),
     "setup/add_key": (None, "setup_add_key"),
     "setup/remove_key": (None, "setup_remove_key"),
@@ -114,6 +116,12 @@ class _ChatSearchParams(BaseModel):
     limit: Optional[int] = None
 
 
+class _TodoRespondParams(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, coerce_numbers_to_str=True)
+    session_id: str = Field(alias="sessionId")
+    outcome: str
+
+
 class _SetupKeyParams(BaseModel):
     provider: str
     base_url: str = Field(alias="baseUrl")
@@ -170,6 +178,14 @@ def _model_kwargs(model, params):
 
 def _dump(model):
     return model.model_dump(mode="json", by_alias=True, exclude_none=True, exclude_unset=True)
+
+
+def _raggie_version():
+    """Installed raggiecode package version, or "dev" when not installed."""
+    try:
+        return _pkg_version("raggiecode")
+    except Exception:
+        return "dev"
 
 
 def default_web_dist():
@@ -320,6 +336,51 @@ class _HttpClientHub:
         )
         return outcome if isinstance(outcome, str) else ""
 
+    async def request_plan(self, session_id, tool_call, options, detail="", **kwargs):
+        """Three-way todo-plan approval request (approve / reject / cancelled).
+
+        Uses kind "plan" internally so it can be resolved by session from the
+        web UI's todo modal without colliding with tool permission requests.
+        """
+        if self.auto_approve:
+            return schema.RequestPermissionResponse(
+                outcome=schema.AllowedOutcome(option_id="approve", outcome="selected")
+            )
+        outcome = await self._request(
+            session_id,
+            "session/request_permission",
+            {
+                "toolCall": _dump(tool_call),
+                "options": [_dump(o) for o in options],
+                "detail": detail,
+            },
+            "plan",
+        )
+        if outcome == "approve":
+            return schema.RequestPermissionResponse(
+                outcome=schema.AllowedOutcome(option_id="approve", outcome="selected")
+            )
+        if outcome == "reject":
+            return schema.RequestPermissionResponse(
+                outcome=schema.DeniedOutcome(outcome="rejected")
+            )
+        return schema.RequestPermissionResponse(
+            outcome=schema.DeniedOutcome(outcome="cancelled")
+        )
+
+    async def resolve_pending_plan(self, session_id, outcome):
+        """Resolve the in-flight plan approval for a session, if any."""
+        for request_id, pending in list(self.pendings.items()):
+            if (
+                pending["session_id"] == session_id
+                and pending["kind"] == "plan"
+                and pending["outcome"] is None
+            ):
+                pending["outcome"] = outcome
+                pending["event"].set()
+                return True
+        return False
+
     async def cancel_pendings(self, session_id, outcome="cancelled"):
         for pending in self.pendings.values():
             if pending["session_id"] != session_id:
@@ -378,6 +439,7 @@ def _make_handler(server):
                     "pid": os.getpid(),
                     "cwd": os.path.realpath(os.getcwd()),
                     "port": server.bound_port,
+                    "version": _raggie_version(),
                 }).encode()
                 try:
                     self.send_response(200)
@@ -559,6 +621,8 @@ def _make_handler(server):
                     kwargs = _model_kwargs(_McpAddParams, params)
                 elif method in ("mcp/remove", "mcp/test"):
                     kwargs = _model_kwargs(_McpNameParams, params)
+                elif method == "todo/respond":
+                    kwargs = _model_kwargs(_TodoRespondParams, params)
                 elif method in ("chats/history", "health/stats", "health/report", "todo/active",
                                 "session/dangling"):
                     kwargs = _model_kwargs(_ChatHistoryParams, params)

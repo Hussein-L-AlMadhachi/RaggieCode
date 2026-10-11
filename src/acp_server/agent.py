@@ -797,6 +797,45 @@ class RaggieACPAgent:
         )
         return {**todo, "tasks": tasks}
 
+    async def respond_todo(self, session_id, outcome, **kwargs):
+        """Approve or reject a pending todo list from the web UI.
+
+        When the agent is currently blocked inside ApproveTodoList, the
+        in-flight plan approval is resolved. Otherwise the active pending list
+        is updated directly so the user can always approve/reject from the
+        todo modal, even after dismissing the transient approval prompt.
+        """
+        session = self.sessions.get(session_id)
+        if session is None:
+            raise acp.RequestError.invalid_params({"detail": f"unknown session '{session_id}'"})
+        if outcome not in ("approve", "reject"):
+            raise acp.RequestError.invalid_params({"detail": "outcome must be 'approve' or 'reject'"})
+
+        conn = self._conn
+        resolve_pending = getattr(conn, "resolve_pending_plan", None)
+        if callable(resolve_pending):
+            if await resolve_pending(session_id, outcome):
+                return {"ok": True, "resolved": True}
+
+        from Agent.chat_history_db import (
+            delete_todo_list,
+            get_active_todo_list,
+            resolve_session_id,
+            update_todo_list_status,
+        )
+
+        loop = asyncio.get_running_loop()
+        effective_id = await loop.run_in_executor(None, resolve_session_id, session.agent.session_id)
+        todo = await loop.run_in_executor(None, get_active_todo_list, effective_id)
+        if todo is None:
+            raise acp.RequestError.invalid_params({"detail": "no pending todo list to respond to"})
+
+        if outcome == "approve":
+            await loop.run_in_executor(None, update_todo_list_status, todo["id"], "approved")
+        else:
+            await loop.run_in_executor(None, delete_todo_list, todo["id"])
+        return {"ok": True, "resolved": False}
+
     # -- first-time setup (web UI) ---------------------------------------
 
     async def setup_status(self, **kwargs):
@@ -1200,6 +1239,7 @@ class RaggieACPAgent:
         """
         io_backend.set_permission_handler(self._make_permission_handler(session))
         io_backend.set_ask_handler(self._make_ask_handler(session))
+        io_backend.set_plan_handler(self._make_plan_handler(session))
         # Register the subagent bridge sink so DispatchSubagent work streams
         # to the UI while the parent tool call is still running. The bridge
         # no-ops when the transport has no subagent_event channel (stdio).
@@ -1243,6 +1283,7 @@ class RaggieACPAgent:
         finally:
             io_backend.clear_permission_handler()
             io_backend.clear_ask_handler()
+            io_backend.clear_plan_handler()
             if subagent_sink_registered:
                 try:
                     from Tools.dispatch_subagent import unregister_parent_sink
@@ -1260,7 +1301,14 @@ class RaggieACPAgent:
         Mirrors the terminal UI's startup behavior: interrupted turns leave
         tool calls without responses; re-running them repairs the history and
         the agent continues where it stopped.
+
+        The agent's in-memory history is re-synced from the DB first: the
+        session may have been re-opened (page reload / second tab) while a
+        previous turn was still winding down, leaving this agent with a stale
+        snapshot. Resuming from that snapshot could re-execute a tool call the
+        previous turn already answered, duplicating its response.
         """
+        session.agent.reload_chat_history()
         return self._stream_agent_events(
             session, lambda: session.agent.resume_dangling_tool_work()
         )
@@ -1425,5 +1473,49 @@ class RaggieACPAgent:
             if option_id == "allow_always":
                 return "always"
             return option_id == "allow"
+
+        return handler
+
+    def _make_plan_handler(self, session):
+        """Three-way todo-plan approval handler (approve / reject / cancelled).
+
+        Uses a dedicated ``request_plan`` channel (kind "plan") so a dismissed
+        approval can be distinguished from a tool permission and resolved later
+        by the web UI's persistent approve/reject controls.
+        """
+        conn = self._conn
+        loop = self._loop
+
+        def handler(title, detail):
+            options = [
+                schema.PermissionOption(option_id="approve", name="Approve", kind="allow_once"),
+                schema.PermissionOption(option_id="reject", name="Reject", kind="reject_once"),
+            ]
+            tool_call = schema.ToolCallUpdate(
+                tool_call_id=session.current_tool_call_id or f"{session.session_id}-plan",
+                title=title,
+                status="pending",
+            )
+            # HTTP transport has a dedicated request_plan channel (kind "plan");
+            # stdio connections only implement standard ACP request_permission,
+            # which still echoes back the custom option ids.
+            request = getattr(conn, "request_plan", None)
+            if not callable(request):
+                request = getattr(conn, "request_permission", None)
+            if not callable(request):
+                return io_backend.PLAN_CANCELLED
+            future = asyncio.run_coroutine_threadsafe(
+                request(
+                    session.session_id, tool_call=tool_call, options=options, detail=detail,
+                ),
+                loop,
+            )
+            response = future.result()
+            option_id = getattr(response.outcome, "option_id", None)
+            if option_id == "approve":
+                return io_backend.PLAN_ALLOW
+            if option_id == "reject":
+                return io_backend.PLAN_REJECT
+            return io_backend.PLAN_CANCELLED
 
         return handler

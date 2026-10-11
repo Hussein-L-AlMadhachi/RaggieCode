@@ -387,6 +387,25 @@ def migrate_v12(configs):
     return configs
 
 
+def migrate_v13(configs):
+    """v12 -> v13: refresh the bundled coder_system_prompt.md.
+
+    The system prompt shipped in src/config/coder_system_prompt.md was updated;
+    existing users keep a stale copy in their config dir. This migration copies
+    the new default over the user's copy so the updated prompt ships to existing
+    users without a reinstall.
+    """
+    from Agent.config import USER_CONFIG_DIR
+
+    default_prompt = _DEFAULT_CONFIG_DIR / "coder_system_prompt.md"
+    if default_prompt.exists() and USER_CONFIG_DIR.exists():
+        try:
+            shutil.copy2(default_prompt, USER_CONFIG_DIR / "coder_system_prompt.md")
+        except OSError:
+            pass
+    return configs
+
+
 MIGRATIONS = {
     2: migrate_v2,
     3: migrate_v3,
@@ -399,6 +418,7 @@ MIGRATIONS = {
     10: migrate_v10,
     11: migrate_v11,
     12: migrate_v12,
+    13: migrate_v13,
 }
 
 # Latest schema version. Derived from the registry so it stays in sync.

@@ -15,6 +15,10 @@ import { extractSseFrames } from "./sse";
 export interface BridgeHostDeps {
   /** Verified port of this window's server, or undefined while not running. */
   readonly getPort: () => number | undefined;
+  /** Resolve the port once the server is ready (waits through startup). */
+  readonly waitForPort: () => Promise<number>;
+  /** Current lifecycle state of this window's server. */
+  readonly getState: () => string;
   /** Deliver a reply message into the webview. */
   readonly postToUi: (message: unknown) => void;
 }
@@ -51,6 +55,9 @@ export function createBridgeHost(
       case "raggie-cancel-stream":
         cancelStream(msg, streams);
         break;
+      case "raggie-get-server-state":
+        deps.postToUi({ type: "raggie-server-state", state: deps.getState() });
+        break;
       default:
         // Unknown message types are ignored.
         break;
@@ -68,6 +75,15 @@ function asRequestArgs(msg: BridgeMessage): RequestArgs | undefined {
 
 function serverUrl(port: number): string {
   return `http://127.0.0.1:${port}/`;
+}
+
+/** Resolve this window's port, waiting for startup when not yet running. */
+async function resolvePort(deps: BridgeHostDeps): Promise<number> {
+  const port = deps.getPort();
+  if (port !== undefined) {
+    return port;
+  }
+  return deps.waitForPort();
 }
 
 /**
@@ -88,8 +104,10 @@ async function forwardHttp(
   if (!args) {
     return;
   }
-  const port = deps.getPort();
-  if (port === undefined) {
+  let port: number;
+  try {
+    port = await resolvePort(deps);
+  } catch {
     deps.postToUi({
       type: "raggie-http-result",
       id: args.id,
@@ -146,8 +164,10 @@ async function forwardStream(
   if (!args) {
     return;
   }
-  const port = deps.getPort();
-  if (port === undefined) {
+  let port: number;
+  try {
+    port = await resolvePort(deps);
+  } catch {
     deps.postToUi({
       type: "raggie-stream-end",
       id: args.id,

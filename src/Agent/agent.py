@@ -704,6 +704,24 @@ class Agent:
 
         yield from self.start()
 
+    def reload_chat_history(self):
+        """Refresh the in-memory chat history from the persisted store.
+
+        A web session can be re-opened (page reload / second tab) while a
+        previous turn is still winding down; the new agent then holds a stale
+        snapshot of the conversation. Resuming from that snapshot could
+        re-execute a tool call the previous turn already answered, duplicating
+        its response. Callers that await the previous turn before resuming
+        (the ACP resume path) re-sync via this method so the DB is the source
+        of truth.
+
+        The system prompt is kept in-memory for sessions that never persisted
+        it (only handovers write it), so it is re-injected when missing.
+        """
+        self.chat_history = load_messages(self.session_id)
+        if not any(msg.get("role") == "system" for msg in self.chat_history):
+            self.chat_history.insert(0, {"role": "system", "content": self.system_prompt})
+
     def _ends_with_unanswered_user_message(self):
         """True when the last stored message is a plain user prompt.
 

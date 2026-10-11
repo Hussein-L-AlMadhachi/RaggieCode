@@ -73,6 +73,18 @@ export function onHostMessage(handler: (msg: any) => void): void {
   hostHandlers.push(handler);
 }
 
+// Ask the host for the current backend state. The host replies with a
+// 'raggie-server-state' message (delivered to onHostMessage handlers). Used on
+// startup so the loader is correct even when the view loads after the server
+// has already finished booting (the host's own push may have raced the UI's
+// listener registration).
+export function requestServerState(): void {
+  const api = getVsCodeApi();
+  if (api) {
+    api.postMessage({ type: 'raggie-get-server-state' });
+  }
+}
+
 // Send a JSON-RPC body and resolve with the parsed JSON response.
 export function transportPost(body: string): Promise<any> {
   body = withSid(body);

@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { spawn } from "node:child_process";
 import { RaggieServerManager } from "./serverManager";
 import { RaggieStatusBar } from "./statusBar";
-import { ensureVenv, isVenvPlatform } from "./venvManager";
+import { ensureVenv, isVenvPlatform, upgradeVenvRaggieCode } from "./venvManager";
 import { RaggieChatViewProvider, VIEW_ID } from "./webviewProvider";
 import { registerCopySelection } from "./copyRef";
 import {
@@ -80,20 +80,29 @@ async function offerInstallOnFailure(
   });
 }
 
-/** Install raggiecode: via the venv on linux/bsd, via system pip elsewhere. */
+/** Install or upgrade raggiecode: via the venv on linux/bsd, via pip elsewhere. */
 async function pipInstallRaggieCode(
-  output: vscode.OutputChannel
+  output: vscode.OutputChannel,
+  upgrade = false
 ): Promise<void> {
-  // On venv platforms the venv creation includes installing raggiecode.
+  // On venv platforms the venv creation includes installing raggiecode; an
+  // upgrade runs pip install --upgrade against the already-created venv.
   if (isVenvPlatform()) {
-    await ensureVenv(output);
+    if (upgrade) {
+      await upgradeVenvRaggieCode(output);
+    } else {
+      await ensureVenv(output);
+    }
     return;
   }
+  const args = upgrade
+    ? ["install", "--upgrade", "raggiecode"]
+    : ["install", "raggiecode"];
   return new Promise((resolve, reject) => {
-    output.appendLine("[raggie] running: pip install raggiecode");
+    output.appendLine(`[raggie] running: pip ${args.join(" ")}`);
     output.show(true);
 
-    const child = spawn("pip", ["install", "raggiecode"]);
+    const child = spawn("pip", args);
     child.stdout?.on("data", (chunk: Buffer) => output.append(String(chunk)));
     child.stderr?.on("data", (chunk: Buffer) => output.append(String(chunk)));
 
@@ -104,9 +113,39 @@ async function pipInstallRaggieCode(
       if (code === 0) {
         resolve();
       } else {
-        reject(new Error(`pip install raggiecode exited with code ${code}`));
+        reject(new Error(`pip ${args.join(" ")} exited with code ${code}`));
       }
     });
+  });
+}
+
+/**
+ * When the running backend reports a version older than the extension
+ * expects, upgrade the raggiecode package and restart the server to pick it
+ * up. Failures are surfaced but never loop: the manager fires this at most
+ * once per activation.
+ */
+async function handleBackendBehind(
+  installed: string,
+  expected: string,
+  output: vscode.OutputChannel,
+  serverManager: RaggieServerManager
+): Promise<void> {
+  output.appendLine(
+    `[raggie] backend version ${installed} is older than expected ${expected}; updating raggiecode...`
+  );
+  await runWithProgress("Updating Raggie Code...", async () => {
+    try {
+      await pipInstallRaggieCode(output, true);
+      void vscode.window.showInformationMessage(
+        `Raggie Code updated to ${expected}. Restarting the server...`
+      );
+      await serverManager.restart();
+    } catch (err) {
+      void vscode.window.showErrorMessage(
+        `Raggie Code update failed: ${String(err)}`
+      );
+    }
   });
 }
 
@@ -187,6 +226,12 @@ export function activate(context: vscode.ExtensionContext): void {
   // a missing executable (raggie not installed yet), offer to install it.
   serverManager.onError((message) => {
     void offerInstallOnFailure(message, output, serverManager);
+  });
+
+  // If the running backend is behind the version this extension expects,
+  // upgrade the raggiecode package and restart the server once.
+  serverManager.onBackendBehind(({ installed, expected }) => {
+    void handleBackendBehind(installed, expected, output, serverManager);
   });
 
   const disposables: vscode.Disposable[] = [

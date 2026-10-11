@@ -222,11 +222,12 @@ def handle_approve_todo_list(arguments, toolcall_id, parent_session_id=None):
                 print(f"{GRAY}   Context: {task['context']}{RESET}")
         print("=" * 60)
         
-        # Ask for user approval   io_backend.confirm enforces strict y/n validation
-        # and routes through the ACP permission handler in headless mode.
-        approved = io_backend.confirm("Do you want me to carry on with this plan?")
+        # Ask for user approval. confirm_plan distinguishes a dismissal
+        # (cancelled) from an explicit rejection so a transient miss-click in
+        # the web UI never destroys a plan the user meant to approve.
+        result = io_backend.confirm_plan("Do you want me to carry on with this plan?")
 
-        if approved:
+        if result == io_backend.PLAN_ALLOW:
             update_todo_list_status(todo_list_id, 'approved')
             print(f"{GREEN}Todo list approved. Starting execution...{RESET}")
             return {
@@ -234,7 +235,7 @@ def handle_approve_todo_list(arguments, toolcall_id, parent_session_id=None):
                 "tool_call_id": toolcall_id,
                 "content": "Todo list approved and ready for execution",
             }
-        else:
+        elif result == io_backend.PLAN_REJECT:
             # Ask for feedback
             feedback = io_backend.ask("Please elaborate on what should be changed: ").strip()
             # Rejected plans are dead   delete the list entirely. The agent
@@ -245,6 +246,16 @@ def handle_approve_todo_list(arguments, toolcall_id, parent_session_id=None):
                 "role": "tool",
                 "tool_call_id": toolcall_id,
                 "content": f"Todo list rejected and discarded. Build a new plan incorporating this user feedback: {feedback}",
+            }
+        else:
+            # Approval was dismissed / cancelled. Keep the plan pending so the
+            # user can approve it later from the web UI todo modal (or the
+            # agent can re-offer approval).
+            print(f"{YELLOW}Todo list approval dismissed; keeping plan pending.{RESET}")
+            return {
+                "role": "tool",
+                "tool_call_id": toolcall_id,
+                "content": "Todo list approval was dismissed; the plan is still pending and can be approved later.",
             }
     except Exception as e:
         return {

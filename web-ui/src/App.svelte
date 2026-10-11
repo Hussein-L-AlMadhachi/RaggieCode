@@ -4,6 +4,7 @@
   import ChatView from './lib/components/ChatView.svelte';
   import SetupPage from './lib/components/SetupPage.svelte';
   import ToastHost from './lib/components/ToastHost.svelte';
+  import Loader from './lib/components/Loader.svelte';
 
   // Check whether the agent is configured (API keys + roles). If not,
   // the setup wizard replaces the chat list until it completes.
@@ -13,7 +14,11 @@
 </script>
 
 <div class="window">
-  {#if chatStore.showSetup}
+  {#if chatStore.backendStarting}
+    <div class="backend-loader">
+      <Loader label="Starting Raggie server..." />
+    </div>
+  {:else if chatStore.showSetup}
     <SetupPage />
   {:else if chatStore.mode === 'list'}
     <ChatList />
@@ -40,6 +45,13 @@
     .window {
       border: none;
     }
+  }
+
+  .backend-loader {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
   }
 
   /* Hosted in the VS Code webview: fill the iframe exactly   percentage

@@ -9,6 +9,7 @@
   import TodoBar from './TodoBar.svelte';
   import TodoModal from './TodoModal.svelte';
   import ConfirmModal from './ConfirmModal.svelte';
+  import ReplyModal from './ReplyModal.svelte';
   import Loader from './Loader.svelte';
   import BusyButton from './BusyButton.svelte';
   import { theme, toggleTheme } from '../theme.svelte';
@@ -202,6 +203,8 @@
 <HealthModal />
 
 <TodoModal />
+
+<ReplyModal />
 
 <ConfirmModal
   open={confirmMode !== null}

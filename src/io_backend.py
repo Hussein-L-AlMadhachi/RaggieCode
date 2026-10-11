@@ -124,6 +124,21 @@ def clear_ask_handler():
     _local.ask_handler = None
 
 
+def set_plan_handler(handler):
+    """Install a todo-plan approval handler for the current thread.
+
+    The handler is a callable ``(title: str, detail: str) -> str`` returning
+    one of ``PLAN_ALLOW``, ``PLAN_REJECT`` or ``PLAN_CANCELLED``. It is kept
+    separate from the permission handler so a dismissed approval is never
+    conflated with a tool permission decision.
+    """
+    _local.plan_handler = handler
+
+
+def clear_plan_handler():
+    _local.plan_handler = None
+
+
 def confirm(title, detail=""):
     """Ask the user to approve an action. Returns True when approved.
 
@@ -171,6 +186,11 @@ def confirm(title, detail=""):
 ALLOW = "yes"
 REJECT = "no"
 ALLOW_ALWAYS = "always"
+
+# Return values for confirm_plan (three-way todo-plan approval).
+PLAN_ALLOW = "allow"
+PLAN_REJECT = "reject"
+PLAN_CANCELLED = "cancelled"
 
 
 def confirm_with_always(title, detail=""):
@@ -226,6 +246,55 @@ def confirm_with_always(title, detail=""):
                 file=sys.stderr,
             )
     return ALLOW if _auto_approve else REJECT
+
+
+def confirm_plan(title, detail=""):
+    """Ask the user to approve a todo-list plan (three-way).
+
+    Returns ``PLAN_ALLOW``, ``PLAN_REJECT``, or ``PLAN_CANCELLED``. Unlike
+    ``confirm``, dismissal (EOF / cancelled / no handler answer) is reported
+    explicitly as ``PLAN_CANCELLED`` so the caller can keep the plan pending
+    instead of treating a transient dismissal as a rejection.
+    """
+    if _mode == MODE_TERMINAL:
+        prompt_text = f"{title}\n"
+        if detail:
+            prompt_text += f"{detail}\n"
+        prompt_text += "? (y/n): "
+        while True:
+            _flush_stdin()
+            try:
+                answer = input(prompt_text)
+            except KeyboardInterrupt:
+                print()
+                return PLAN_CANCELLED
+            except EOFError:
+                print()
+                return PLAN_CANCELLED
+            stripped = answer.strip().lower()
+            if stripped == "y":
+                return PLAN_ALLOW
+            if stripped == "n":
+                return PLAN_REJECT
+            print("Please answer 'y' or 'n'.")
+
+    handler = getattr(_local, "plan_handler", None)
+    if handler is not None:
+        title = _ANSI_RE.sub("", title)
+        detail = _ANSI_RE.sub("", detail)
+        try:
+            result = handler(title, detail)
+            if result in (PLAN_ALLOW, "always", True):
+                return PLAN_ALLOW
+            if result == PLAN_REJECT:
+                return PLAN_REJECT
+            return PLAN_CANCELLED
+        except Exception as err:
+            print(
+                f"Plan approval request failed ({err}); falling back to policy.",
+                file=sys.stderr,
+            )
+    return PLAN_ALLOW if _auto_approve else PLAN_CANCELLED
 
 
 def ask(message, default="", options=None, allow_multiple=False):

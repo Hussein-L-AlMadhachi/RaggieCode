@@ -1,5 +1,6 @@
 import { friendlyError, notify, promptSse, resumeSse, rpc } from './api';
 import { toast } from './toast.svelte';
+import { buildPrompt, replyLabel } from './reply';
 import type {
   AgentMessage,
   ChatListItem,
@@ -12,6 +13,7 @@ import type {
   MessageSearchResult,
   Pending,
   PermissionOption,
+  Reply,
   SessionUpdate,
   SetupRole,
   SetupStatus,
@@ -82,6 +84,7 @@ export async function mcpTest(name: string) {
 }
 
 let nextMsgId = 1;
+let nextReplyId = 1;
 
 const HISTORY_PAGE = 30;
 
@@ -144,6 +147,10 @@ class ChatStore {
   status = $state<string | null>(null);
   pending = $state<Pending | null>(null);
   draft = $state('');
+  /** Replies the user attached to specific messages/tool calls this turn. */
+  replies = $state<Reply[]>([]);
+  /** Id of the reply whose edit modal is open (null when closed). */
+  replyModalId = $state<string | null>(null);
   /** Last surfaced error. Shown to the user as a toast (no banner); kept
    *  so callers can avoid stacking duplicate error reports. */
   error = $state('');
@@ -192,6 +199,20 @@ class ChatStore {
    * new message. Shows the resume banner even before the backend's
    * background wind-down has persisted the interrupted state. */
   interrupted = $state(false);
+
+  /** Backend lifecycle state reported by the VS Code host. Standalone builds
+   *  keep the default 'running' (there is no host to report state). */
+  serverState = $state<'starting' | 'running' | 'stopped' | 'error'>('running');
+
+  /** True while the backend is still booting; drives the startup loader. */
+  get backendStarting(): boolean {
+    return this.serverState === 'starting';
+  }
+
+  /** Adopt a backend lifecycle state pushed by the VS Code host. */
+  setServerState(state: 'starting' | 'running' | 'stopped' | 'error') {
+    this.serverState = state;
+  }
 
   get showSetup(): boolean {
     return this.setupChecked && (!this.setupComplete || this.setupOpen || !!this.configError);
@@ -442,6 +463,8 @@ class ChatStore {
     this.dangling = null;
     this.interrupted = false;
     this.draft = '';
+    this.replies = [];
+    this.replyModalId = null;
     this.pending = null;
     this.status = null;
     this.busy = false;
@@ -630,6 +653,8 @@ class ChatStore {
     this.messages = [];
     this.subagentStack = [];
     this.draft = '';
+    this.replies = [];
+    this.replyModalId = null;
     this.pending = null;
     this.status = null;
     this.busy = false;
@@ -655,10 +680,53 @@ class ChatStore {
 
   // -- prompting ----------------------------------------------------------
 
+  /**
+   * Start a reply to a specific native text selection within a message/tool
+   * call: capture the selected text plus its surrounding lines, add it as a
+   * composer marker, and open its edit modal.
+   */
+  addReply(target: Message, selection: { text: string; contextAbove: string; contextBelow: string }) {
+    const id = `r${++nextReplyId}`;
+    const reply: Reply = {
+      id,
+      targetId: target.id,
+      label: replyLabel(target),
+      quoteText: selection.text,
+      contextAbove: selection.contextAbove,
+      contextBelow: selection.contextBelow,
+      content: '',
+    };
+    this.replies = [...this.replies, reply];
+    this.replyModalId = id;
+  }
+
+  removeReply(id: string) {
+    this.replies = this.replies.filter((r) => r.id !== id);
+    if (this.replyModalId === id) this.replyModalId = null;
+  }
+
+  setReplyContent(id: string, content: string) {
+    const reply = this.replies.find((r) => r.id === id);
+    if (reply) reply.content = content;
+  }
+
+  openReplyModal(id: string) {
+    this.replyModalId = id;
+  }
+
+  closeReplyModal() {
+    this.replyModalId = null;
+  }
+
   async send() {
     const text = this.draft.trim();
     if (!text || !this.currentSessionId || this.busy) return;
+    // The agent sees the draft with reply blocks embedded; the chat bubble
+    // keeps showing just the draft so the XML stays out of the transcript.
+    const prompt = buildPrompt(text, this.replies);
     this.draft = '';
+    this.replies = [];
+    this.replyModalId = null;
     this.error = '';
     this.interrupted = false;
     // Sending a new prompt supersedes any interrupted work: the resume offer
@@ -668,18 +736,18 @@ class ChatStore {
     this.dangling = null;
     this.commandHint = null;
     this.pendingCommand = null;
-    await this.streamTurn(text);
+    await this.streamTurn(text, prompt);
   }
 
-  private async streamTurn(text: string) {
+  private async streamTurn(displayText: string, promptText: string) {
     const sessionId = this.currentSessionId;
     if (!sessionId || this.busy) return;
     this.error = '';
-    this.messages.push({ id: msgId(), kind: 'user', text });
+    this.messages.push({ id: msgId(), kind: 'user', text: displayText });
     this.busy = true;
     await this.runTurn(
-      () => promptSse(sessionId, text, (frame) => this.handleFrame(frame)),
-      () => { this.draft = text; },
+      () => promptSse(sessionId, promptText, (frame) => this.handleFrame(frame)),
+      () => { this.draft = displayText; },
     );
   }
 
@@ -768,7 +836,7 @@ class ChatStore {
     }
   }
 
-  async respondPermission(outcome: 'allow' | 'allow_always' | 'reject') {
+  async respondPermission(outcome: string) {
     const pending = this.pending;
     if (!pending || pending.kind !== 'perm') return;
     this.pending = null;
@@ -791,6 +859,20 @@ class ChatStore {
       toast('Answer sent');
     } catch (err) {
       toast(friendlyError(err, 'Could not send the answer.'), 'error');
+    }
+  }
+
+  /** Approve or reject the active pending todo plan from the todo modal. */
+  async respondTodo(outcome: 'approve' | 'reject') {
+    const sessionId = this.currentSessionId;
+    if (!sessionId) return;
+    try {
+      await rpc('todo/respond', { sessionId, outcome });
+      toast(outcome === 'approve' ? 'Plan approved' : 'Plan rejected', 'success');
+    } catch (err) {
+      this.failRpc(err);
+    } finally {
+      await this.loadTodo();
     }
   }
 
