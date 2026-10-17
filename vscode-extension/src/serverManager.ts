@@ -23,14 +23,14 @@ export interface Identity {
   raggie: boolean;
   cwd?: string;
   port?: number;
-  /** Installed raggiecode version reported by the server (e.g. "1.0.2"). */
+  /** Installed raggiecode version reported by the server (e.g. "1.0.3"). */
   version?: string;
   /** True when any HTTP process (raggie or not) answered on the port. */
   answered?: boolean;
 }
 
 /** The raggiecode version this extension expects the backend to run. */
-export const EXPECTED_BACKEND_VERSION = "1.0.2";
+export const EXPECTED_BACKEND_VERSION = "1.0.3";
 
 /**
  * True when an installed version is strictly older than the expected version.

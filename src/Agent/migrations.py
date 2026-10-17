@@ -406,6 +406,27 @@ def migrate_v13(configs):
     return configs
 
 
+def migrate_v14(configs):
+    """v13 -> v14: refresh the bundled coder_system_prompt.md.
+
+    The system prompt gained the default tech stack section and the clean
+    code structure rule. Existing users keep a stale copy in their config
+    dir, so this migration copies the new default over it.
+
+    Idempotent: copying the same file twice is harmless, and the migration
+    is a no-op when the default prompt or the user config dir is missing.
+    """
+    from Agent.config import USER_CONFIG_DIR
+
+    default_prompt = _DEFAULT_CONFIG_DIR / "coder_system_prompt.md"
+    if default_prompt.exists() and USER_CONFIG_DIR.exists():
+        try:
+            shutil.copy2(default_prompt, USER_CONFIG_DIR / "coder_system_prompt.md")
+        except OSError:
+            pass
+    return configs
+
+
 MIGRATIONS = {
     2: migrate_v2,
     3: migrate_v3,
@@ -419,6 +440,7 @@ MIGRATIONS = {
     11: migrate_v11,
     12: migrate_v12,
     13: migrate_v13,
+    14: migrate_v14,
 }
 
 # Latest schema version. Derived from the registry so it stays in sync.

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { chatStore } from '../store.svelte';
+  import { highlightCode } from '../highlight';
   import BusyButton from './BusyButton.svelte';
   import type { Pending } from '../types';
 
@@ -11,12 +12,13 @@
 
   const options = $derived(pending.options);
   const detail = $derived(pending.detail ?? '');
+  const detailHtml = $derived(detail ? highlightCode(detail, 'bash') : '');
 </script>
 
     <div class="perm-panel">
       <div class="perm-title">{pending.title || 'Agent wants to:'}</div>
       {#if detail}
-        <div class="perm-command">{detail}</div>
+        <div class="perm-command">{@html detailHtml}</div>
       {/if}
   <div class="perm-actions">
     {#each options as option (option.optionId)}
@@ -49,7 +51,12 @@
     line-height: var(--lh-base);
     background: var(--bg-code);
     padding: var(--sp-4);
-    word-break: break-all;
+    max-height: 200px;
+    overflow: auto;
+    overscroll-behavior: contain;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
   }
 
   .perm-actions {

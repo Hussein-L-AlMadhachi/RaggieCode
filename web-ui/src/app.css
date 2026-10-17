@@ -36,6 +36,15 @@
   --danger-fg: #b54747;
   --danger-bg: #ffe3e3;
 
+  /* ---------- Colors: syntax highlighting ---------- */
+  --syn-keyword: #8a3d8f;
+  --syn-string: #2f7a3e;
+  --syn-comment: #7a7f86;
+  --syn-number: #a35a00;
+  --syn-builtin: #1f6f8b;
+  --syn-variable: #8a4b1f;
+  --syn-meta: #5f5aa8;
+
   /* ---------- Colors: chat bubbles ---------- */
   --bubble-bg: #1e1e1e;
   --bubble-fg: #fff;
@@ -139,6 +148,15 @@ html[data-theme='dark'] {
   --danger-fg: #e06c6c;
   --danger-bg: #341d1d;
 
+  /* ---------- Colors: syntax highlighting ---------- */
+  --syn-keyword: #d79ad8;
+  --syn-string: #8fd694;
+  --syn-comment: #7d8178;
+  --syn-number: #e0b53e;
+  --syn-builtin: #7fc4e0;
+  --syn-variable: #d8a86a;
+  --syn-meta: #a9a3e8;
+
   /* ---------- Colors: chat bubbles ---------- */
   --bubble-fg: #151514;
   --bubble-bg: #e1e1e1;
@@ -204,6 +222,75 @@ button {
 
 button:disabled {
   cursor: default;
+}
+
+/* ---------- Syntax highlighting (highlight.js tokens) ----------
+   Shared by markdown code blocks and the shell-command approval panel.
+   highlight.js emits its own token classes; colors are mapped onto the
+   palette variables so both themes stay readable. */
+.hljs-comment,
+.hljs-quote {
+  color: var(--syn-comment);
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-doctag,
+.hljs-name {
+  color: var(--syn-keyword);
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-attribute,
+.hljs-template-tag {
+  color: var(--syn-string);
+}
+
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link {
+  color: var(--syn-number);
+}
+
+.hljs-built_in,
+.hljs-title,
+.hljs-type,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: var(--syn-builtin);
+}
+
+.hljs-variable,
+.hljs-template-variable,
+.hljs-params,
+.hljs-attr,
+.hljs-property {
+  color: var(--syn-variable);
+}
+
+.hljs-meta {
+  color: var(--syn-meta);
+}
+
+.hljs-deletion {
+  color: var(--danger-fg);
+}
+
+.hljs-addition {
+  color: var(--success-fg);
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 600;
 }
 
 /* ---------- Hosted in the VS Code webview (html.vscode-host) ----------

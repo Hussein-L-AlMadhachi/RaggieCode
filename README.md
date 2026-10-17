@@ -1,6 +1,6 @@
 # Raggie Code
 
-> *Raggie Code v1.0.2*
+> *Raggie Code v1.0.3*
 
 <p style="padding:30px 50px;">
   <img src="Raggie.png" alt="Raggie" width="312">
@@ -64,7 +64,7 @@ Point at exact lines with `@path/to/file.py:10-25` anywhere in your prompt.
 ```
 $ raggie code .
 
-Raggie Agent (code) v1.0.2 - Interactive Mode
+Raggie Agent (code) v1.0.3 - Interactive Mode
 --------------------------------------------------
 
 Thinking mode: Zen - to change it use /thinkingMode

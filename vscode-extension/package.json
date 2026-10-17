@@ -2,7 +2,7 @@
   "name": "raggie-code",
   "displayName": "Raggie Code",
   "description": "Raggie Code, your coding agent in VS Code: chat with the agent in a sidebar and copy selection references straight into it.",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "publisher": "HusseinAlmadhaji",
   "license": "Apache-2.0",
   "icon": "media/raggie-icon.png",
@@ -182,7 +182,7 @@
     "build:ui": "node scripts/copy-ui.js"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^22.20.5",
     "@types/vscode": "^1.85.0",
     "typescript": "^5.3.0",
     "vitest": "^5.0.2"

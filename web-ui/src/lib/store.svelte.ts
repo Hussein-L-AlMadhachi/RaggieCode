@@ -1,6 +1,7 @@
 import { friendlyError, notify, promptSse, resumeSse, rpc } from './api';
 import { toast } from './toast.svelte';
 import { buildPrompt, replyLabel } from './reply';
+import { playAttentionClink, playClink } from './audio';
 import type {
   AgentMessage,
   ChatListItem,
@@ -794,6 +795,8 @@ class ChatStore {
       this.status = null;
       this.pending = null;
       this.subagentStack = [];
+      // The turn is over: a single clink, unlike the three-clink prompt signal.
+      playClink();
       this.loadChats();
       await this.loadTodo();
       // Refresh the interrupted-work banner: a cancelled or errored turn
@@ -868,6 +871,7 @@ class ChatStore {
     if (!sessionId) return;
     try {
       await rpc('todo/respond', { sessionId, outcome });
+      if (outcome === 'approve') playAttentionClink();
       toast(outcome === 'approve' ? 'Plan approved' : 'Plan rejected', 'success');
     } catch (err) {
       this.failRpc(err);
@@ -909,6 +913,7 @@ class ChatStore {
         detail: frame.params.detail ?? '',
         options,
       };
+      playAttentionClink();
     } else if (frame.method === 'session/request_ask') {
       this.pending = {
         kind: 'ask',
@@ -917,6 +922,7 @@ class ChatStore {
         options: Array.isArray(frame.params.options) ? frame.params.options : undefined,
         allowMultiple: !!frame.params.allowMultiple,
       };
+      playAttentionClink();
     } else if (frame.method === 'session/health_stats') {
       const normalized = normalizeHealth(frame.params.stats);
       if (normalized) {
